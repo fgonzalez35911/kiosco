@@ -1,0 +1,199 @@
+/* ESTÁNDAR MAESTRO "EL 10" - NO TOCAR MÁS */
+
+/* 1. Banner de Ancho Completo */
+.header-blue { 
+    background: linear-gradient(135deg, #102A57 0%, #1a3c75 100%); 
+    color: white; 
+    padding: 40px 0; 
+    border-radius: 0 !important; /* Siempre recto */
+    margin-bottom: 30px; 
+    position: relative; 
+    overflow: hidden; 
+    border-bottom: 4px solid #75AADB; 
+    box-shadow: 0 4px 15px rgba(16, 42, 87, 0.25);
+    width: 100%; 
+}
+
+.bg-icon-large { 
+    position: absolute; top: 50%; right: 20px; 
+    transform: translateY(-50%) rotate(-10deg); 
+    font-size: 10rem; opacity: 0.1; color: white; pointer-events: none; 
+}
+
+/* 2. Widgets Premium (Glassmorphism) */
+.header-widget { 
+    background: rgba(255, 255, 255, 0.1); 
+    border: 1px solid rgba(255, 255, 255, 0.2); 
+    border-radius: 15px; 
+    padding: 15px; 
+    transition: 0.3s; 
+    display: flex !important; 
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+    color: white !important;
+    text-decoration: none;
+    height: 100%;
+}
+
+.header-widget:hover { 
+    background: rgba(255, 255, 255, 0.2); 
+    transform: translateY(-3px);
+    box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+}
+
+.icon-box { 
+    width: 45px; 
+    height: 45px; 
+    border-radius: 12px; 
+    display: flex; 
+    align-items: center; 
+    justify-content: center; 
+    font-size: 1.4rem;
+}
+.widget-label { 
+    font-size: 0.7rem; 
+    text-transform: uppercase; 
+    opacity: 0.8; 
+    font-weight: 700; 
+    letter-spacing: 1px; 
+    margin-bottom: 5px; 
+}
+
+.widget-value { 
+    font-family: 'Oswald', sans-serif; 
+    font-size: 1.8rem; 
+    font-weight: 700; 
+    line-height: 1; 
+}
+
+/* 3. Tarjetas de Cuerpo */
+.card-custom { border: none; border-radius: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
+
+/* CONTROL DE IMÁGENES DE REVISTA (GLOBAL) */
+.preview-img {
+    width: 100%;
+    max-width: 300px;
+    height: 400px;
+    object-fit: cover;
+    border-radius: 12px;
+    border: 1px solid #ddd;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+    background-color: #f8f9fa;
+    margin: 0 auto;
+    display: block;
+}
+
+/* Ajuste para las miniaturas de la tabla */
+.table img.rounded {
+    height: 60px;
+    width: 45px;
+    object-fit: cover;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+
+/* BOTONES DE ACCIÓN EN TABLAS */
+.btn-action { 
+    width: 36px; 
+    height: 36px; 
+    display: inline-flex; 
+    align-items: center; 
+    justify-content: center; 
+    border-radius: 10px; 
+    border: none; 
+    margin-left: 6px; 
+    transition: all 0.2s ease; 
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    font-size: 1.1rem;
+}
+
+.btn-action:hover { 
+    transform: translateY(-2px); 
+    box-shadow: 0 5px 10px rgba(0,0,0,0.1); 
+    filter: brightness(0.95);
+}
+
+/* COLORES ESPECÍFICOS POR FUNCIÓN */
+.btn-eye { background: #e0f2fe !important; color: #0284c7 !important; }
+.btn-wallet { background: #dcfce7 !important; color: #16a34a !important; }
+.btn-edit { background: #ffedd5 !important; color: #ea580c !important; }
+.btn-del { background: #fee2e2 !important; color: #dc2626 !important; }
+.btn-key { background: #fef9c3 !important; color: #a16207 !important; }
+
+/* AJUSTE DE LA TABLA PARA QUE NO SE VEA AMONTONADA */
+.table-custom thead th {
+    background-color: #f8f9fa;
+    color: #6c757d;
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.5px;
+    padding: 15px 10px;
+    border-bottom: 2px solid #edf2f7;
+}
+
+.cliente-row td {
+    padding: 15px 10px;
+    border-bottom: 1px solid #f1f5f9;
+}
+/* TARJETAS DE OPINIÓN */
+.review-card {
+    border: none; border-radius: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    transition: 0.2s; border-left: 5px solid #dee2e6; margin-bottom: 15px;
+    background: white;
+}
+.review-card:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
+.review-bad { border-left-color: #dc3545 !important; }
+.review-mid { border-left-color: #ffc107 !important; }
+.review-good { border-left-color: #198754 !important; }
+
+/*COMBOS */
+
+.card-combo { background: white; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); overflow: hidden; height: 100%; display: flex; flex-direction: column; }
+.img-combo-box { height: 180px; width: 100%; display: flex; align-items: center; justify-content: center; padding: 15px; background: white; border-bottom: 1px solid #f0f0f0; }
+.img-combo-box img { max-height: 100%; max-width: 100%; object-fit: contain; }
+
+/* --- RECUPERACIÓN MAESTRA DE GRILLA Y FILTROS DE PRODUCTOS --- */
+.filter-bar { background: white; border-radius: 12px; padding: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.03); margin-bottom: 30px; display: flex; gap: 15px; align-items: center; flex-wrap: wrap; }
+.search-group { flex-grow: 1; min-width: 250px; position: relative; }
+.search-input { width: 100%; border: 1px solid #dee2e6; border-radius: 8px; padding: 10px 10px 10px 40px; font-size: 0.95rem; color: #495057; background-color: #fff; transition: 0.2s; }
+.search-input:focus { border-color: #86b7fe; outline: 0; box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.15); }
+.search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: #6c757d; font-size: 1.1rem; }
+.filter-select { border: 1px solid #dee2e6; border-radius: 8px; padding: 10px 35px 10px 15px; font-size: 0.95rem; color: #495057; background-color: #fff; cursor: pointer; min-width: 200px; appearance: none; background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e"); background-repeat: no-repeat; background-position: right 0.75rem center; background-size: 16px 12px; }
+
+.card-prod { background: white; border-radius: 12px; border: none; box-shadow: 0 2px 8px rgba(0,0,0,0.04); transition: transform 0.2s, box-shadow 0.2s; height: 100%; position: relative; overflow: hidden; display: flex; flex-direction: column; }
+.card-prod:hover { transform: translateY(-5px); box-shadow: 0 12px 20px rgba(0,0,0,0.08); }
+.img-area { height: 240px; padding: 20px; display: flex; align-items: center; justify-content: center; background: white; border-bottom: 1px solid #f8f9fa; position: relative; cursor: pointer; }
+.prod-img { max-height: 100%; max-width: 100%; object-fit: contain; transition: 0.3s; }
+.badge-top-left { position: absolute; top: 15px; left: 15px; z-index: 10; }
+.badge-offer { background: #dc3545; color: white; padding: 5px 10px !important; border-radius: 6px; font-weight: 700; font-size: 0.75rem; display: flex; align-items: center; gap: 5px; box-shadow: 0 2px 5px rgba(220,53,69,0.3); }
+
+.card-prod .card-body { padding: 20px !important; flex-grow: 1; display: flex; flex-direction: column; }
+.cat-label { font-size: 0.7rem; color: #adb5bd; font-weight: 700; text-transform: uppercase; margin-bottom: 5px; }
+.prod-title { font-size: 1.1rem; font-weight: 700; color: #212529; margin-bottom: 5px; line-height: 1.3; }
+.prod-code { font-size: 0.8rem; color: #6c757d; margin-bottom: 15px; }
+
+.price-main { font-size: 1.8rem; font-weight: 800; color: #dc3545; line-height: 1; letter-spacing: -0.5px; }
+.price-normal { font-size: 1.8rem; font-weight: 800; color: #212529; line-height: 1; letter-spacing: -0.5px; }
+.financial-box { background: #f8f9fa; border-radius: 8px; padding: 10px 15px; display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 10px; }
+
+.btn-icon-action { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 6px; border: 1px solid transparent; background: transparent; transition: 0.2s; color: #6c757d; font-size: 1.1rem; }
+.btn-icon-action.btn-edit:hover { border-color: #ffc107; color: #ffc107; background: #fffbf0; }
+.btn-icon-action.btn-del:hover { border-color: #dc3545; color: #dc3545; background: #fff5f5; }
+/* display: flex permite que ms-auto empuje los elementos al extremo derecho */
+.card-footer-actions { display: flex; align-items: center; margin-top: auto; padding-top: 10px; }
+
+@media (min-width: 768px) { .sticky-desktop { position: sticky; top: 70px; z-index: 90; } }
+
+/* --- EXCLUSIVOS BIENES DE USO (NO REPETIDOS) --- */
+.card-activo { border: none; border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.02); transition: 0.2s; overflow: hidden; background: white; }
+.card-activo:hover { transform: translateY(-5px); box-shadow: 0 10px 20px rgba(0,0,0,0.08); }
+.img-zone { height: 180px; background-color: #e9ecef; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.img-zone img { width: 100%; height: 100%; object-fit: cover; }
+.bg-nuevo { background-color: #d1e7dd; color: #0f5132; }
+.bg-bueno { background-color: #cfe2ff; color: #084298; }
+.bg-reparar { background-color: #fff3cd; color: #664d03; }
+.bg-malo { background-color: #f8d7da; color: #842029; }
+.search-box { position: relative; }
+.search-box i { position: absolute; left: 15px; top: 50%; transform: translateY(-50%); color: #666; }
+.search-box input { padding-left: 40px; border-radius: 50px; border: none; height: 45px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
