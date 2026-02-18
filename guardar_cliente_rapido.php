@@ -17,21 +17,38 @@ if (empty($nombre)) {
 }
 
 try {
-    // BLINDAJE PARA ERROR DB:
-    // Si el DNI está vacío, pasamos NULL para que la base de datos no tire error de duplicado (si el campo es UNIQUE)
+    // Tomamos el whatsapp de la caja como teléfono
+    $tel_final = !empty($_POST['telefono']) ? $_POST['telefono'] : ($_POST['whatsapp'] ?? '');
+
+    if (!empty($dni)) {
+        // Verificamos si ya existe para no crear duplicados que rompan el buscador
+        $check = $conexion->prepare("SELECT id, nombre FROM clientes WHERE dni = ? OR dni_cuit = ?");
+        $check->execute([$dni, $dni]);
+        $existe = $check->fetch(); 
+
+        if ($existe) {
+            echo json_encode(['status' => 'success', 'id' => $existe->id, 'nombre' => $existe->nombre, 'msg' => 'Ya existe']);
+            exit;
+        }
+    }
+
     $dni_final = empty($dni) ? null : $dni;
 
-    // Usamos las columnas correctas según tu base de datos
-    // dni_cuit es la clave única importante, dni es secundario. Llenamos ambos por consistencia.
+    // Llenamos dni y dni_cuit con el mismo valor para que el buscador lo vea
     $sql = "INSERT INTO clientes (nombre, dni_cuit, dni, telefono, fecha_registro, limite_credito, saldo_deudor, puntos_acumulados) 
             VALUES (?, ?, ?, ?, NOW(), 0, 0, 0)";
     
     $stmt = $conexion->prepare($sql);
-    // Pasamos $dni_final dos veces (para dni_cuit y dni)
-    $stmt->execute([$nombre, $dni_final, $dni_final, $telefono]);
+    $stmt->execute([$nombre, $dni_final, $dni_final, $tel_final]);
     
     $id = $conexion->lastInsertId();
     
+    // ENVÍO DE BIENVENIDA (FUTBOLERO)
+    $email_cli = $_POST['email'] ?? ''; 
+    if(!empty($email_cli)) {
+        enviarBienvenidaFutbolera($email_cli, $nombre, $conexion);
+    }
+
     echo json_encode(['status' => 'success', 'id' => $id, 'nombre' => $nombre]);
 
 } catch (PDOException $e) {

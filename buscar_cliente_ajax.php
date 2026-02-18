@@ -1,9 +1,9 @@
 <?php
-// buscar_cliente_ajax.php - BUSCADOR INTELIGENTE JSON
-// Devuelve resultados para el autocompletado en canje_puntos.php
+// buscar_cliente_ajax.php - BUSCADOR "EL 10" (FETCH_OBJ COMPLIANT)
+ob_start(); // Inicia el buffer para evitar que espacios o errores rompan el JSON
 
-// 1. Conexión a prueba de fallos
-$rutas_db = [__DIR__ . '/db.php', __DIR__ . '/includes/db.php', 'db.php', '../db.php'];
+// 1. Conexión con ruta garantizada desde /acciones/
+$rutas_db = ['../db.php', '../includes/db.php', 'db.php', 'includes/db.php'];
 $conexion = null;
 foreach ($rutas_db as $ruta) {
     if (file_exists($ruta)) {
@@ -11,6 +11,10 @@ foreach ($rutas_db as $ruta) {
         break;
     }
 }
+
+// Limpiamos cualquier texto que haya podido soltar db.php (espacios, warnings)
+ob_clean();
+header('Content-Type: application/json; charset=utf-8');
 
 if (!$conexion) {
     echo json_encode([]);
@@ -23,32 +27,33 @@ if (strlen($term) > 0) {
     $term = trim($term);
     $like = "%$term%";
     
-    // Buscamos por Nombre, DNI o CUIT
-    $stmt = $conexion->prepare("SELECT id, nombre, dni, dni_cuit, puntos_acumulados, saldo_favor, 
+    // 2. Buscamos respetando FETCH_OBJ. Buscamos en ambas columnas por las dudas.
+    $stmt = $conexion->prepare("SELECT id, nombre, dni_cuit, puntos_acumulados, saldo_favor, 
                                 (SELECT COALESCE(SUM(monto),0) FROM movimientos_cc WHERE id_cliente = clientes.id AND tipo = 'debe') - 
                                 (SELECT COALESCE(SUM(monto),0) FROM movimientos_cc WHERE id_cliente = clientes.id AND tipo = 'haber') as saldo_calculado
                                 FROM clientes 
-                                WHERE nombre LIKE ? OR dni LIKE ? OR dni_cuit LIKE ? 
+                                WHERE (nombre LIKE ? OR dni_cuit LIKE ?) 
                                 LIMIT 10");
-    $stmt->execute([$like, $like, $like]);
-    $clientes = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $stmt->execute([$like, $like]);
+    $clientes = $stmt->fetchAll(); 
     
-    // Formateamos para el frontend
+    // LIMPIEZA CRÍTICA: Evita que cualquier espacio o error rompa el buscador
+    if (ob_get_length()) ob_clean(); 
+    header('Content-Type: application/json; charset=utf-8');
+
     $resultados = [];
     foreach($clientes as $c) {
         $resultados[] = [
-            'id' => $c['id'],
-            'label' => $c['nombre'], // Para UI standard
-            'nombre' => $c['nombre'],
-            'dni' => $c['dni'] ?: $c['dni_cuit'] ?: 'S/DNI',
-            'puntos' => number_format($c['puntos_acumulados'], 0),
-            'saldo' => number_format($c['saldo_calculado'], 0)
+            'id'     => $c->id,
+            'label'  => $c->nombre,
+            'nombre' => $c->nombre,
+            'dni'    => $c->dni_cuit ?: 'S/DNI',
+            'puntos' => number_format($c->puntos_acumulados, 0, '', ''),
+            'saldo'  => number_format($c->saldo_calculado, 2, '.', '')
         ];
     }
-    
-    header('Content-Type: application/json');
     echo json_encode($resultados);
 } else {
     echo json_encode([]);
 }
-?>
+exit;
