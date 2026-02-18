@@ -736,44 +736,47 @@ if(parseFloat(p.precio_oferta) > 0) {
         window.abrirModalClientes = function() { $('#input-search-modal').val(''); $('#lista-clientes-modal').html(''); modalCliente.show(); setTimeout(()=>$('#input-search-modal').focus(),500); };
         
         // BUSCADOR DE CLIENTES (CORREGIDO PARA PASAR PUNTOS)
-        $('#input-search-modal').on('keyup', function() {
+        // BUSCADOR DE CLIENTES (CORREGIDO)
+        $('#input-search-modal').on('input', function() {
             let term = $(this).val(); 
-            if(term.length < 2) return;
+            if(term.length < 2) { $('#lista-clientes-modal').html(''); return; }
             
-            $.getJSON('acciones/buscar_cliente_ajax.php', { term: term }, function(res) {
-                let html = ''; 
-                if(res.length > 0) {
-                    res.forEach(c => { 
-                        let dni = c.dni ? c.dni : '--'; 
-                        
-                        let saldoVal = parseFloat(c.saldo.toString().replace(/,/g, '')) || 0;
-                        let saldoClass = saldoVal > 0 ? 'text-danger fw-bold' : (saldoVal < 0 ? 'text-success fw-bold' : 'text-muted');
-                        let saldoTexto = saldoVal > 0 ? 'Debe: $' + c.saldo : (saldoVal < 0 ? 'Favor: $' + Math.abs(saldoVal) : 'Al día');
+            $.ajax({
+                url: 'acciones/buscar_cliente_ajax.php',
+                data: { term: term },
+                dataType: 'json',
+                success: function(res) {
+                    let html = ''; 
+                    if(res && res.length > 0) {
+                        res.forEach(c => { 
+                            let dni = c.dni ? c.dni : '--'; 
+                            let saldoVal = parseFloat(c.saldo) || 0;
+                            let saldoClass = saldoVal > 0 ? 'text-danger fw-bold' : (saldoVal < 0 ? 'text-success fw-bold' : 'text-muted');
+                            let saldoTexto = saldoVal > 0 ? 'Debe: $' + c.saldo : (saldoVal < 0 ? 'Favor: $' + Math.abs(saldoVal).toFixed(2) : 'Al día');
 
-                        html += `
-                        <a href="#" class="list-group-item list-group-item-action p-3 border-bottom" 
-                           onclick="seleccionarCliente(${c.id}, '${c.nombre}', '${c.saldo}', '${c.puntos}')">
-                            <div class="d-flex w-100 justify-content-between align-items-center">
-                                <div>
-                                    <h6 class="mb-1 fw-bold text-primary">${c.nombre}</h6>
-                                    <small class="text-muted"><i class="bi bi-person-vcard"></i> ${dni}</small>
+                            html += `
+                            <a href="#" class="list-group-item list-group-item-action p-3 border-bottom" 
+                               onclick="seleccionarCliente(${c.id}, '${c.nombre.replace(/'/g, "\\'")}', '${c.saldo}', '${c.puntos}')">
+                                <div class="d-flex w-100 justify-content-between align-items-center">
+                                    <div>
+                                        <h6 class="mb-1 fw-bold text-primary">${c.nombre}</h6>
+                                        <small class="text-muted"><i class="bi bi-person-vcard"></i> ${dni}</small>
+                                    </div>
+                                    <div class="text-end">
+                                        <div class="${saldoClass}" style="font-size:0.85rem;">${saldoTexto}</div>
+                                        <small class="text-warning fw-bold"><i class="bi bi-star-fill"></i> ${c.puntos} pts</small>
+                                    </div>
                                 </div>
-                                <div class="text-end">
-                                    <div class="${saldoClass}" style="font-size:0.85rem;">${saldoTexto}</div>
-                                    <small class="text-warning fw-bold"><i class="bi bi-star-fill"></i> ${c.puntos} pts</small>
-                                </div>
-                            </div>
-                        </a>`; 
-                    });
-                } else {
-                    html = '<div class="p-3 text-center text-muted">No se encontraron clientes.</div>';
-                }
-                $('#lista-clientes-modal').html(html);
+                            </a>`; 
+                        });
+                    } else {
+                        html = '<div class="p-3 text-center text-muted">No se encontraron clientes.</div>';
+                    }
+                    $('#lista-clientes-modal').html(html);
+                },
+                error: function() { console.error("Error en el buscador de clientes"); }
             });
         });
-
-        // PROCESAR VENTA (FINALIZAR - CORREGIDO RUTA)
-        // PROCESAR VENTA (FINALIZAR)
         // PROCESAR VENTA (FINALIZAR)
         $('#btn-finalizar').click(function() {
             if(carrito.length === 0) return Swal.fire('Error', 'El carrito está vacío.', 'error');
@@ -827,9 +830,6 @@ if(parseFloat(p.precio_oferta) > 0) {
             <div class="d-grid gap-2 mt-3">
                 <button onclick="window.open('ticket.php?id=${idVenta}', 'pop-up', 'width=300,height=600')" class="btn btn-dark py-2">
                     <i class="bi bi-printer"></i> Imprimir Ticket
-                </button>
-                <button onclick="enviarTicketWhatsApp(${idVenta})" class="btn btn-success py-2">
-                    <i class="bi bi-whatsapp"></i> Enviar por WhatsApp
                 </button>
                 <button onclick="enviarTicketEmail(${idVenta})" class="btn btn-primary py-2">
                     <i class="bi bi-envelope"></i> Enviar por Correo

@@ -22,10 +22,11 @@ if (isset($_GET['borrar'])) {
         $checkVentas = $conexion->prepare("SELECT COUNT(*) FROM ventas WHERE id_cliente = ?");
         $checkVentas->execute([$id_borrar]);
 
-        if ($checkCC->fetchColumn() > 0 || $checkVentas->fetchColumn() > 0) {
-             header("Location: clientes.php?error=tiene_datos"); exit;
-        }
-
+        // 1. Movemos las ventas al Consumidor Final (ID 1) para no romper la base de datos
+        $conexion->prepare("UPDATE ventas SET id_cliente = 1 WHERE id_cliente = ?")->execute([$id_borrar]);
+        // 2. Borramos deudas/pagos
+        $conexion->prepare("DELETE FROM movimientos_cc WHERE id_cliente = ?")->execute([$id_borrar]);
+        // 3. Borramos al cliente
         $conexion->prepare("DELETE FROM clientes WHERE id = ?")->execute([$id_borrar]);
         header("Location: clientes.php?msg=eliminado"); exit;
 
@@ -48,26 +49,31 @@ if (isset($_POST['reset_pass'])) {
 }
 
 // 4. LÓGICA DE CREACIÓN / EDICIÓN (Tu lógica original)
+// 4. LÓGICA DE CREACIÓN / EDICIÓN (CIRUGÍA DEFINITIVA - SIN ERRORES)
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && !isset($_POST['reset_pass'])) {
     $nombre = trim($_POST['nombre']);
-$dni = trim($_POST['dni']);
-$telefono = trim($_POST['telefono']);
-$fecha_nac = $_POST['fecha_nacimiento']; // Nuevo campo
-$limite = $_POST['limite'];
-$id_edit = $_POST['id_edit'] ?? '';
+    $dni = trim($_POST['dni']);
+    $telefono = trim($_POST['telefono']);
+    $fecha_nac = $_POST['fecha_nacimiento'];
+    $limite = $_POST['limite'];
+    $id_edit = $_POST['id_edit'] ?? '';
+    $email_post = trim($_POST['email'] ?? '');
 
-if (!empty($nombre)) {
-    if ($id_edit) {
-        $sql = "UPDATE clientes SET nombre=?, dni=?, telefono=?, fecha_nacimiento=?, limite_credito=? WHERE id=?";
-        $conexion->prepare($sql)->execute([$nombre, $dni, $telefono, $fecha_nac, $limite, $id_edit]);
-    } else {
-        $sql = "INSERT INTO clientes (nombre, dni, telefono, fecha_nacimiento, limite_credito, fecha_registro) VALUES (?, ?, ?, ?, ?, NOW())";
-        $conexion->prepare($sql)->execute([$nombre, $dni, $telefono, $fecha_nac, $limite]);
-    }
+    if (!empty($nombre)) {
+        if ($id_edit) {
+            $sql = "UPDATE clientes SET nombre=?, dni=?, dni_cuit=?, telefono=?, email=?, fecha_nacimiento=?, limite_credito=? WHERE id=?";
+            $conexion->prepare($sql)->execute([$nombre, $dni, $dni, $telefono, $email_post, $fecha_nac, $limite, $id_edit]);
+        } else {
+            $sql = "INSERT INTO clientes (nombre, dni, dni_cuit, telefono, email, fecha_nacimiento, limite_credito, fecha_registro) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())";
+            $conexion->prepare($sql)->execute([$nombre, $dni, $dni, $telefono, $email_post, $fecha_nac, $limite]);
+            
+            if(!empty($email_post)) {
+                enviarBienvenidaFutbolera($email_post, $nombre, $conexion);
+            }
+        }
         header("Location: clientes.php"); exit;
     }
 }
-
 // 5. CONSULTA DE DATOS (Tus subconsultas de deudas intactas)
 $sql = "SELECT c.*, 
         (SELECT COALESCE(SUM(monto),0) FROM movimientos_cc WHERE id_cliente = c.id AND tipo = 'debe') - 
@@ -97,8 +103,9 @@ foreach($clientes as $c) {
     'id' => $c['id'],
     'nombre' => htmlspecialchars($c['nombre']),
     'dni' => $c['dni'] ?? 'No registrado',
-    'fecha_nacimiento' => $c['fecha_nacimiento'], // Agregá esta línea
-        'telefono' => $c['telefono'] ?? 'No registrado',
+    'email' => $c['email'] ?? '',
+    'fecha_nacimiento' => $c['fecha_nacimiento'],
+    'telefono' => $c['telefono'] ?? 'No registrado',
         'limite' => $c['limite_credito'],
         'deuda' => $c['saldo_calculado'],
         'puntos' => $c['puntos_acumulados'],
@@ -284,9 +291,15 @@ try {
     <div class="mb-3"><label class="form-label small fw-bold">Nombre Completo *</label><input type="text" name="nombre" id="nombre" class="form-control fw-bold" required></div>
     <div class="row g-2 mb-3"><div class="col-6"><label class="form-label small fw-bold">DNI</label><input type="text" name="dni" id="dni" class="form-control"></div>
     <div class="col-6"><label class="form-label small fw-bold">Teléfono</label><input type="text" name="telefono" id="telefono" class="form-control"></div></div>
-    <div class="mb-3">
-    <label class="form-label small fw-bold">Fecha de Nacimiento</label>
-    <input type="date" name="fecha_nacimiento" id="fecha_nacimiento" class="form-control">
+    <div class="row g-2 mb-3">
+    <div class="col-6">
+        <label class="form-label small fw-bold">Fecha de Nacimiento</label>
+        <input type="date" name="fecha_nacimiento" id="fecha_nacimiento" class="form-control">
+    </div>
+    <div class="col-6">
+        <label class="form-label small fw-bold">Correo Electrónico</label>
+        <input type="email" name="email" id="email" class="form-control">
+    </div>
 </div>
     <div class="mb-4 bg-light p-3 rounded border"><label class="form-label small fw-bold text-danger">Límite de Fiado ($)</label><input type="number" name="limite" id="limite" class="form-control fw-bold text-danger" value="0"></div>
     <div class="d-grid"><button type="submit" class="btn btn-primary btn-lg fw-bold" id="btn-guardar">GUARDAR CLIENTE</button></div></form>
@@ -303,6 +316,7 @@ try {
     function editar(id) { const data = clientesDB[id]; document.getElementById('id_edit').value = data.id; document.getElementById('nombre').value = data.nombre; document.getElementById('dni').value = (data.dni === 'No registrado') ? '' : data.dni; 
     document.getElementById('telefono').value = (data.telefono === 'No registrado') ? '' : data.telefono;
     document.getElementById('fecha_nacimiento').value = data.fecha_nacimiento;
+    document.getElementById('email').value = data.email;
     document.getElementById('limite').value = data.limite;
 
 
@@ -341,4 +355,37 @@ document.getElementById('titulo-modal').innerText = "Editar Cliente"; $('#modalG
     });
 </script>
 
-<?php include 'includes/layout_footer.php'; ?>
+<?php 
+function enviarBienvenidaFutbolera($email, $nombre, $conexion) {
+    require_once __DIR__ . '/libs/PHPMailer/src/Exception.php';
+    require_once __DIR__ . '/libs/PHPMailer/src/PHPMailer.php';
+    require_once __DIR__ . '/libs/PHPMailer/src/SMTP.php';
+    $conf = $conexion->query("SELECT * FROM configuracion WHERE id=1")->fetch(PDO::FETCH_OBJ);
+    $mail = new PHPMailer\PHPMailer\PHPMailer(true);
+    try {
+        $mail->isSMTP(); $mail->Host = 'smtp.hostinger.com'; $mail->SMTPAuth = true;
+        $mail->Username = 'info@federicogonzalez.net'; $mail->Password = 'Fmg35911@';
+        $mail->SMTPSecure = 'ssl'; $mail->Port = 465; $mail->CharSet = 'UTF-8';
+        $mail->setFrom('info@federicogonzalez.net', $conf->nombre_negocio);
+        $mail->addAddress($email, $nombre); $mail->isHTML(true);
+        $mail->Subject = "⚽ ¡BIENVENIDO AL PLANTEL! Ya tenés tu dorsal en " . $conf->nombre_negocio;
+        $mail->Body = "
+        <div style='font-family: Arial; max-width: 600px; margin: 0 auto; border: 1px solid #102A57; border-radius: 15px; overflow: hidden;'>
+            <div style='background: linear-gradient(135deg, #102A57 0%, #1a3c75 100%); padding: 30px; text-align: center;'>
+                <h1 style='color: white; margin: 0;'>¡BIENVENIDO AL EQUIPO!</h1>
+                <p style='color: #75AADB; font-weight: bold;'>Tu fichaje ha sido confirmado</p>
+            </div>
+            <div style='padding: 30px; color: #333; text-align: center;'>
+                <h2 style='color: #102A57;'>¡Hola, $nombre!</h2>
+                <p>Ya sos oficialmente parte de <strong>$conf->nombre_negocio</strong>. Entraste a la cancha para ganar.</p>
+                <div style='background: #eef2f7; padding: 20px; border-radius: 10px; margin: 20px 0;'>
+                    <p style='font-size: 18px; margin: 0;'>Cada vez que compres, <strong>sumás puntos</strong> para canjear por premios.</p>
+                </div>
+                <p>Presentá tu DNI en el mostrador en cada partido para que no se te escape ningún punto.</p>
+                <p style='margin-top: 25px; font-weight: bold;'>¡Nos vemos en el próximo partido!</p>
+            </div>
+        </div>";
+        $mail->send();
+    } catch (Exception $e) {}
+}
+include 'includes/layout_footer.php'; ?>
