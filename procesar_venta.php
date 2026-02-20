@@ -138,9 +138,29 @@ $total = floatval($_POST['total'] ?? 0);
         }
     }
 
+        // --- NUEVA VALIDACIÓN: CONTROL DE LÍMITE DE CUPÓN ---
+    if (!empty($cupon_codigo)) {
+        $stmtCheckCup = $conexion->prepare("SELECT cantidad_limite, usos_actuales, activo FROM cupones WHERE codigo = ?");
+        $stmtCheckCup->execute([$cupon_codigo]);
+        $cupData = $stmtCheckCup->fetch(PDO::FETCH_ASSOC);
+
+        if ($cupData) {
+            if ($cupData['activo'] == 0) {
+                throw new Exception("El cupón '$cupon_codigo' ya no está activo.");
+            }
+            // Si el límite es mayor a 0 (0 significa infinito)
+            if ($cupData['cantidad_limite'] > 0) {
+                if ($cupData['usos_actuales'] >= $cupData['cantidad_limite']) {
+                    throw new Exception("El cupón '$cupon_codigo' ha alcanzado su límite de usos permitido.");
+                }
+            }
+        }
+    }
+
     // ---------------------------------------------------------
     // 5. REGISTRO DE LA VENTA (CABECERA)
     // ---------------------------------------------------------
+
     $total = redondearVenta($total, $redondeo_activo);
     $fecha_actual = date('Y-m-d H:i:s');
     
@@ -244,11 +264,18 @@ $total = floatval($_POST['total'] ?? 0);
             $conexion->prepare("INSERT INTO movimientos_cc (id_cliente, id_venta, id_usuario, tipo, monto, descripcion, fecha) VALUES (?, ?, ?, 'haber', ?, 'Uso Saldo a Favor', ?)")->execute([$id_cliente, $venta_id, $user_id, $saldo_favor_usado * -1, $fecha_actual]);
         }
 
-        if ($pago_deuda > 0) {
+                if ($pago_deuda > 0) {
             $concepto = "Pago a cuenta en Ticket #" . $venta_id;
             $conexion->prepare("INSERT INTO movimientos_cc (id_cliente, id_venta, id_usuario, tipo, monto, descripcion, fecha) VALUES (?, ?, ?, 'haber', ?, ?, ?)")->execute([$id_cliente, $venta_id, $user_id, $pago_deuda, $concepto, $fecha_actual]);
         }
     }
+
+    // --- NUEVA LÓGICA: ACTUALIZAR USO DE CUPÓN ---
+    if (!empty($cupon_codigo)) {
+        $stmtCup = $conexion->prepare("UPDATE cupones SET usos_actuales = usos_actuales + 1 WHERE codigo = ?");
+        $stmtCup->execute([$cupon_codigo]);
+    }
+
     
     // Auditoría
     $detalles_audit = "Venta #$venta_id | Total: $$total | Cliente ID: $id_cliente";
