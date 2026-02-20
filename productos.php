@@ -1,5 +1,67 @@
 <?php
 // productos.php - VERSIÓN PREMIUM UNIFICADA
+session_start();
+
+// 1. CONEXIÓN PREVIA PARA PROCESAMIENTO (Evita pantalla en blanco al redireccionar)
+$rutas_db = [__DIR__ . '/db.php', __DIR__ . '/includes/db.php', 'db.php', 'includes/db.php'];
+foreach ($rutas_db as $ruta) { if (file_exists($ruta)) { require_once $ruta; break; } }
+
+// 2. PROCESAR ACCIONES ANTES DE CUALQUIER SALIDA HTML
+if(isset($_GET['toggle_id'])) {
+    $id_tog = intval($_GET['toggle_id']);
+    $st_act = intval($_GET['estado']);
+    $nuevo = $st_act == 1 ? 0 : 1;
+
+    // AUDITORÍA: Obtenemos datos del producto (Respetando FETCH_OBJ)
+    $stmtP = $conexion->prepare("SELECT descripcion FROM productos WHERE id = ?");
+    $stmtP->execute([$id_tog]);
+    $p_obj = $stmtP->fetch();
+    $nombre_p = $p_obj ? $p_obj->descripcion : 'Desconocido';
+
+    $conexion->prepare("UPDATE productos SET activo = ? WHERE id = ?")->execute([$nuevo, $id_tog]);
+
+    // REGISTRO EN CAJA NEGRA
+    $estado_txt = ($nuevo == 1) ? 'ACTIVADO' : 'DESACTIVADO';
+    $detalles = "Producto/Combo: $nombre_p -> Cambio de Estado a: $estado_txt";
+    $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'PRODUCTO_ESTADO', ?, NOW())")
+             ->execute([$_SESSION['usuario_id'], $detalles]);
+
+    header("Location: productos.php"); 
+    exit;
+}
+
+if (isset($_GET['borrar'])) {
+    if (!isset($_GET['token']) || $_GET['token'] !== $_SESSION['csrf_token']) die("Error de seguridad.");
+    $id_borrar = intval($_GET['borrar']);
+
+    // AUDITORÍA: Datos antes de la eliminación
+    $stmtP = $conexion->prepare("SELECT descripcion, codigo_barras, tipo FROM productos WHERE id = ?");
+    $stmtP->execute([$id_borrar]);
+    $p_obj = $stmtP->fetch();
+
+    if ($p_obj) {
+        if ($p_obj->tipo === 'combo') { 
+            $stmtC = $conexion->prepare("SELECT id FROM combos WHERE codigo_barras = ?");
+            $stmtC->execute([$p_obj->codigo_barras]);
+            $id_c = $stmtC->fetchColumn();
+            if($id_c) {
+                $conexion->prepare("DELETE FROM combo_items WHERE id_combo = ?")->execute([$id_c]);
+                $conexion->prepare("DELETE FROM combos WHERE id = ?")->execute([$id_c]);
+            }
+        }
+        $conexion->prepare("DELETE FROM productos WHERE id = ?")->execute([$id_borrar]);
+
+        // REGISTRO EN CAJA NEGRA
+        $detalles_b = "Producto/Combo Eliminado: " . $p_obj->descripcion . " (Cód: " . $p_obj->codigo_barras . ")";
+        $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'PRODUCTO_ELIMINADO', ?, NOW())")
+                 ->execute([$_SESSION['usuario_id'], $detalles_b]);
+    }
+
+    header("Location: productos.php?msg=borrado"); 
+    exit;
+}
+
+// 3. CARGA DE CABECERA Y CONFIGURACIÓN DE VISTA
 require_once 'includes/layout_header.php'; 
 
 $conf_global = $conexion->query("SELECT stock_use_global, stock_global_valor, dias_alerta_vencimiento FROM configuracion WHERE id=1")->fetch(PDO::FETCH_ASSOC);
@@ -7,35 +69,8 @@ $dias_venc = intval($conf_global['dias_alerta_vencimiento'] ?? 30);
 $usar_global = (isset($conf_global['stock_use_global']) && $conf_global['stock_use_global'] == 1);
 $stock_critico_global = intval($conf_global['stock_global_valor'] ?? 5);
 
-if(isset($_GET['toggle_id'])) {
-    $id_tog = intval($_GET['toggle_id']);
-    $st_act = intval($_GET['estado']);
-    $nuevo = $st_act == 1 ? 0 : 1;
-    $conexion->prepare("UPDATE productos SET activo = ? WHERE id = ?")->execute([$nuevo, $id_tog]);
-    header("Location: productos.php"); exit;
-}
-
-if (isset($_GET['borrar'])) {
-    if (!isset($_GET['token']) || $_GET['token'] !== $_SESSION['csrf_token']) die("Error de seguridad.");
-    $id_borrar = intval($_GET['borrar']);
-    $stmtCheck = $conexion->prepare("SELECT codigo_barras, tipo FROM productos WHERE id = ?");
-    $stmtCheck->execute([$id_borrar]);
-    $prodData = $stmtCheck->fetch(PDO::FETCH_ASSOC);
-        if ($prodData && $prodData['tipo'] === 'combo') { 
-        $stmtC = $conexion->prepare("SELECT id FROM combos WHERE codigo_barras = ?");
-        $stmtC->execute([$prodData['codigo_barras']]);
-        $id_c = $stmtC->fetchColumn();
-        if($id_c) {
-            $conexion->prepare("DELETE FROM combo_items WHERE id_combo = ?")->execute([$id_c]);
-            $conexion->prepare("DELETE FROM combos WHERE id = ?")->execute([$id_c]);
-        }
-    }
-
-    $conexion->prepare("DELETE FROM productos WHERE id = ?")->execute([$id_borrar]);
-    header("Location: productos.php?msg=borrado"); exit;
-}
-
 $categorias = $conexion->query("SELECT * FROM categorias WHERE activo=1")->fetchAll();
+$proveedores_list = $conexion->query("SELECT id, empresa FROM proveedores ORDER BY empresa ASC")->fetchAll();
 $sql = "SELECT p.*, c.nombre as cat, cb.fecha_inicio, cb.fecha_fin, cb.es_ilimitado FROM productos p LEFT JOIN categorias c ON p.id_categoria=c.id LEFT JOIN combos cb ON p.codigo_barras = cb.codigo_barras ORDER BY p.id DESC";
 $productos = $conexion->query($sql)->fetchAll();
 
@@ -284,11 +319,11 @@ foreach($productos as $p) {
                             </div>
                             
                             <div class="d-flex gap-2 ms-auto">
+                                <button type="button" class="btn-action btn-wallet" title="Reponer Stock" onclick="reponerStock(<?php echo $p->id; ?>, '<?php echo addslashes($p->descripcion); ?>', <?php echo $stock; ?>)">
+                                    <i class="bi bi-plus-circle-fill"></i>
+                                </button>
                                 <a href="producto_formulario.php?id=<?php echo $p->id; ?>" class="btn-action btn-edit" title="Editar">
                                     <i class="bi bi-pencil-fill"></i>
-                                </a>
-                                <a href="productos.php?borrar=<?php echo $p->id; ?>&token=<?php echo $_SESSION['csrf_token']; ?>" class="btn-action btn-del" onclick="return confirm('¿Eliminar producto?')" title="Eliminar">
-                                    <i class="bi bi-trash-fill"></i>
                                 </a>
                             </div>
                         </div>
@@ -464,6 +499,72 @@ const urlParams = new URLSearchParams(window.location.search);
         if (filtroActivo) {
             filtrarStockBajo(); 
         }
+    }
+
+    window.reponerStock = function(id, nombre, actual) {
+        // Preparamos el HTML de los proveedores desde PHP
+        let opcionesProvs = '<option value="">-- Seleccionar (Opcional) --</option>';
+        <?php foreach($proveedores_list as $pr): ?>
+            opcionesProvs += `<option value="<?php echo $pr->id; ?>"><?php echo addslashes($pr->empresa); ?></option>`;
+        <?php endforeach; ?>
+
+        Swal.fire({
+            title: 'Ingreso de Mercadería',
+            html: `
+                <div class="text-start">
+                    <p class="mb-3">Producto: <b class="text-primary">${nombre}</b><br>
+                    <small class="text-muted">Stock actual: ${actual} unidades</small></p>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-bold small">CANTIDAD A SUMAR:</label>
+                        <input type="number" id="cant_reposicion" class="form-control form-control-lg text-center fw-bold border-primary" placeholder="0.00" step="0.001">
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold small">PROVEEDOR:</label>
+                        <select id="prov_reposicion" class="form-select">${opcionesProvs}</select>
+                    </div>
+
+                    <div class="mb-0">
+                        <label class="form-label fw-bold small">NUEVO COSTO UNITARIO (Opcional):</label>
+                        <div class="input-group">
+                            <span class="input-group-text">$</span>
+                            <input type="number" id="costo_reposicion" class="form-control" placeholder="Dejar vacío para no cambiar" step="0.01">
+                        </div>
+                        <small class="text-muted" style="font-size:0.7rem">Si ingresas un costo, se actualizará en la ficha del producto.</small>
+                    </div>
+                </div>
+            `,
+            icon: 'info',
+            showCancelButton: true,
+            confirmButtonText: 'Confirmar Ingreso',
+            cancelButtonText: 'Cancelar',
+            confirmButtonColor: '#102A57',
+            preConfirm: () => {
+                const cant = document.getElementById('cant_reposicion').value;
+                if (!cant || cant <= 0) {
+                    Swal.showValidationMessage('Debes ingresar una cantidad válida');
+                    return false;
+                }
+                return {
+                    id: id,
+                    cantidad: cant,
+                    id_proveedor: document.getElementById('prov_reposicion').value,
+                    nuevo_costo: document.getElementById('costo_reposicion').value
+                };
+            }
+        }).then((result) => {
+            if (result.isConfirmed) {
+                $.post('ajax_stock_reposicion.php', result.value, function(res) {
+                    if(res.status === 'success') {
+                        Swal.fire({ icon: 'success', title: 'Operación Exitosa', text: res.msg, timer: 2000, showConfirmButton: false })
+                        .then(() => { location.reload(); });
+                    } else {
+                        Swal.fire('Error', res.msg, 'error');
+                    }
+                }, 'json');
+            }
+        });
     }
 </script>
 

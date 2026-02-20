@@ -28,6 +28,14 @@ if (isset($_POST['guardar_regla'])) {
         $ratio = $monto_base / $puntos_otorgados;
         $sqlRegla = "UPDATE configuracion SET dinero_por_punto = ? WHERE id = 1";
         $conexion->prepare($sqlRegla)->execute([$ratio]);
+
+        // AUDITORÍA: CAMBIO REGLA DE PUNTOS
+        try {
+            $detalles_audit = "Cambio en regla de puntos: $" . number_format($monto_base, 2) . " = " . $puntos_otorgados . " pts. (Ratio: $" . number_format($ratio, 2) . " por punto)";
+            $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'CONFIG_PUNTOS', ?, NOW())")
+                     ->execute([$_SESSION['usuario_id'], $detalles_audit]);
+        } catch (Exception $e) { }
+
         $mensaje_sweet = "Swal.fire('Configuración Guardada', 'Ahora cada $$monto_base los clientes sumarán $puntos_otorgados puntos.', 'success');";
     }
 }

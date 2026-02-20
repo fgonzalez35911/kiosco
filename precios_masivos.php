@@ -39,8 +39,19 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['confirmar_aumento'])) 
             $conexion->beginTransaction();
             $ids_str = implode(',', array_map('intval', $ids));
             
-            // Auditoría
-            $detalles = "Aumento Masivo del $porcentaje% en $accion a " . count($ids) . " productos.";
+            // Auditoría Detallada
+            $nombre_grupo = "General";
+            try {
+                if ($tipo_filtro == 'proveedor') {
+                    $st = $conexion->prepare("SELECT empresa FROM proveedores WHERE id = ?");
+                } else {
+                    $st = $conexion->prepare("SELECT nombre FROM categorias WHERE id = ?");
+                }
+                $st->execute([$id_filtro]);
+                $nombre_grupo = $st->fetchColumn() ?: "ID #$id_filtro";
+            } catch (Exception $e) { $nombre_grupo = "ID #$id_filtro"; }
+
+            $detalles = "Aumento Masivo del $porcentaje% en " . strtoupper($accion) . " aplicado a " . count($ids) . " productos del grupo " . strtoupper($tipo_filtro) . ": " . $nombre_grupo;
             $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'INFLACION', ?, NOW())")
                      ->execute([$_SESSION['usuario_id'], $detalles]);
 

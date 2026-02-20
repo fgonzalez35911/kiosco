@@ -46,9 +46,22 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         $es_destacado = isset($_POST['es_destacado_web']) ? 1 : 0;
 
         if ($id) {
+            // Obtener stock anterior para auditoría
+            $stmtOld = $conexion->prepare("SELECT stock_actual, descripcion FROM productos WHERE id = ?");
+            $stmtOld->execute([$id]);
+            $prodOld = $stmtOld->fetch(PDO::FETCH_ASSOC);
+            $stock_anterior = floatval($prodOld['stock_actual']);
+
             $sql = "UPDATE productos SET codigo_barras=?, descripcion=?, id_categoria=?, id_proveedor=?, precio_costo=?, precio_venta=?, precio_oferta=?, stock_actual=?, stock_minimo=?, fecha_vencimiento=?, dias_alerta=?, es_vegano=?, es_celiaco=?, es_destacado_web=? WHERE id=?";
             $stmt = $conexion->prepare($sql);
             $stmt->execute([$codigo, $descripcion, $id_cat, $id_prov, $p_costo, $p_venta, $p_oferta, $s_actual, $s_min, $f_venc, $d_alerta, $es_vegano, $es_celiaco, $es_destacado, $id]);
+
+            // Si el stock cambió manualmente, registrar en auditoría
+            if ($stock_anterior != floatval($s_actual)) {
+                $detalles_audit = "Ajuste manual de stock para '" . $prodOld['descripcion'] . "': " . $stock_anterior . " -> " . $s_actual;
+                $stmtAudit = $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'AJUSTE_STOCK_MANUAL', ?, NOW())");
+                $stmtAudit->execute([$_SESSION['usuario_id'], $detalles_audit]);
+            }
         } else {
             $sql = "INSERT INTO productos (codigo_barras, descripcion, id_categoria, id_proveedor, precio_costo, precio_venta, precio_oferta, stock_actual, stock_minimo, fecha_vencimiento, dias_alerta, es_vegano, es_celiaco, es_destacado_web) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
             $stmt = $conexion->prepare($sql);

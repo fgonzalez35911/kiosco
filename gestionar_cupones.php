@@ -13,7 +13,22 @@ if (!isset($_SESSION['usuario_id']) || $_SESSION['rol'] > 2) { header("Location:
 
 // 3. LÓGICA DE BORRADO
 if (isset($_GET['borrar'])) {
-    $conexion->prepare("DELETE FROM cupones WHERE id = ?")->execute([$_GET['borrar']]);
+    $id_borrar = intval($_GET['borrar']);
+    
+    // Obtenemos el código del cupón para la auditoría antes de borrarlo
+    $stmtC = $conexion->prepare("SELECT codigo FROM cupones WHERE id = ?");
+    $stmtC->execute([$id_borrar]);
+    $codigo_cup = $stmtC->fetchColumn();
+
+    $conexion->prepare("DELETE FROM cupones WHERE id = ?")->execute([$id_borrar]);
+
+    // AUDITORÍA: ELIMINACIÓN DE CUPÓN
+    try {
+        $detalles_audit = "Cupón de descuento eliminado: " . ($codigo_cup ?? 'ID #' . $id_borrar);
+        $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'CUPON_ELIMINADO', ?, NOW())")
+                 ->execute([$_SESSION['usuario_id'], $detalles_audit]);
+    } catch (Exception $e) { }
+
     header("Location: gestionar_cupones.php?msg=del"); exit;
 }
 
@@ -34,11 +49,41 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     } else {
         $sql = "INSERT INTO cupones (codigo, descuento_porcentaje, fecha_limite, cantidad_limite, usos_actuales, activo) VALUES (?, ?, ?, ?, 0, 1)";
         $conexion->prepare($sql)->execute([$codigo, $porcentaje, $vencimiento, $limite]);
-        header("Location: gestionar_cupones.php?msg=ok"); exit;
+
+        // AUDITORÍA: CREACIÓN DE CUPÓN
+        try {
+            $txt_limite = ($limite > 0) ? $limite . " usos" : "Ilimitado";
+            $detalles_audit = "Nuevo cupón creado: " . $codigo . " (" . $porcentaje . "% OFF). Límite: " . $txt_limite . ". Vence: " . date('d/m/Y', strtotime($vencimiento));
+            $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'CUPON_NUEVO', ?, NOW())")
+                     ->execute([$_SESSION['usuario_id'], $detalles_audit]);
+        } catch (Exception $e) { }
+
+                header("Location: gestionar_cupones.php?msg=ok"); exit;
     }
 }
 
+// 4.1 LÓGICA DE EDICIÓN
+if (isset($_POST['action']) && $_POST['action'] == 'edit') {
+    $id_edit = intval($_POST['id_cupon']);
+    $codigo = strtoupper(trim($_POST['codigo']));
+    $porcentaje = (int)$_POST['porcentaje'];
+    $vencimiento = $_POST['vencimiento'];
+    $limite = (int)$_POST['limite'];
+
+    $sql = "UPDATE cupones SET codigo = ?, descuento_porcentaje = ?, fecha_limite = ?, cantidad_limite = ? WHERE id = ?";
+    $conexion->prepare($sql)->execute([$codigo, $porcentaje, $vencimiento, $limite, $id_edit]);
+
+    try {
+        $detalles_audit = "Cupón editado: " . $codigo . " (" . $porcentaje . "% OFF). ID: " . $id_edit;
+        $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'CUPON_EDITADO', ?, NOW())")
+                 ->execute([$_SESSION['usuario_id'], $detalles_audit]);
+    } catch (Exception $e) { }
+
+    header("Location: gestionar_cupones.php?msg=edit"); exit;
+}
+
 // 5. CONSULTAS PARA LISTADO Y WIDGETS
+
 $cupones = $conexion->query("SELECT * FROM cupones ORDER BY fecha_limite DESC")->fetchAll(PDO::FETCH_ASSOC);
 // OBTENER COLOR SEGURO (ESTÁNDAR PREMIUM)
 $color_sistema = '#102A57';
@@ -230,11 +275,15 @@ foreach($cupones as $c) {
                                             <div class="fw-bold text-dark"><?php echo $c['usos_actuales']; ?> <small class="text-muted fw-normal">usos</small></div>
                                             <small class="text-muted">Límite: <?php echo $c['cantidad_limite'] > 0 ? $c['cantidad_limite'] : '∞'; ?></small>
                                         </td>
-                                        <td class="text-end pe-4">
+                                                                               <td class="text-end pe-4">
+                                            <button onclick="abrirModalEditar(<?php echo htmlspecialchars(json_encode($c)); ?>)" class="btn btn-sm btn-outline-primary border-0 rounded-circle shadow-sm me-1">
+                                                <i class="bi bi-pencil-square"></i>
+                                            </button>
                                             <button onclick="confirmarBorrado(<?php echo $c['id']; ?>)" class="btn btn-sm btn-outline-danger border-0 rounded-circle shadow-sm">
                                                 <i class="bi bi-trash3-fill"></i>
                                             </button>
                                         </td>
+
                                     </tr>
                                     <?php endforeach; ?>
                                 <?php else: ?>
@@ -272,10 +321,65 @@ foreach($cupones as $c) {
         const urlParams = new URLSearchParams(window.location.search);
         if(urlParams.get('msg') === 'ok') {
             Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: 'Cupón creado correctamente', showConfirmButton: false, timer: 3000 });
-        } else if(urlParams.get('msg') === 'del') {
+                } else if(urlParams.get('msg') === 'del') {
             Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: 'Cupón eliminado', showConfirmButton: false, timer: 3000 });
+        } else if(urlParams.get('msg') === 'edit') {
+            Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: 'Cupón actualizado', showConfirmButton: false, timer: 3000 });
+        }
+
+        function abrirModalEditar(cupon) {
+            Swal.fire({
+                title: 'Editar Cupón',
+                confirmButtonColor: '#102A57',
+                confirmButtonText: 'Guardar Cambios',
+                cancelButtonText: 'Cancelar',
+                showCancelButton: true,
+                html: `
+                    <div class="text-start">
+                        <label class="small fw-bold text-muted text-uppercase">Código</label>
+                        <input type="text" id="edit-codigo" class="form-control mb-3 text-uppercase fw-bold" value="${cupon.codigo}">
+                        <div class="row g-2 mb-3">
+                            <div class="col-6">
+                                <label class="small fw-bold text-muted text-uppercase">% OFF</label>
+                                <input type="number" id="edit-porcentaje" class="form-control" value="${cupon.descuento_porcentaje}">
+                            </div>
+                            <div class="col-6">
+                                <label class="small fw-bold text-muted text-uppercase">Límite</label>
+                                <input type="number" id="edit-limite" class="form-control" value="${cupon.cantidad_limite}">
+                            </div>
+                        </div>
+                        <label class="small fw-bold text-muted text-uppercase">Vencimiento</label>
+                        <input type="date" id="edit-vencimiento" class="form-control" value="${cupon.fecha_limite}">
+                    </div>
+                `,
+                preConfirm: () => {
+                    return {
+                        action: 'edit',
+                        id_cupon: cupon.id,
+                        codigo: document.getElementById('edit-codigo').value,
+                        porcentaje: document.getElementById('edit-porcentaje').value,
+                        limite: document.getElementById('edit-limite').value,
+                        vencimiento: document.getElementById('edit-vencimiento').value
+                    }
+                }
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    const form = document.createElement('form');
+                    form.method = 'POST';
+                    for (const key in result.value) {
+                        const input = document.createElement('input');
+                        input.type = 'hidden';
+                        input.name = key;
+                        input.value = result.value[key];
+                        form.appendChild(input);
+                    }
+                    document.body.appendChild(form);
+                    form.submit();
+                }
+            });
         }
     </script>
+
 
     <?php include 'includes/layout_footer.php'; ?>
 </body>

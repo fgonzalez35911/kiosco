@@ -564,16 +564,57 @@ if(parseFloat(p.precio_oferta) > 0) {
         
         $('#paga-con').on('keyup', calc); $('#input-desc-manual').on('keyup change', calc); $('#input-cupon').on('keyup', validarCupon);
 
-        function validarCupon() {
-            let codigo = $('#input-cupon').val().toUpperCase(); let idCliente = parseInt($('#id-cliente').val()); let msg = $('#msg-cupon');
-            if(codigo.length === 0) { msg.hide(); $('#total-venta').attr('data-porc-desc', 0); calc(); return; }
+                        function validarCupon() {
+            let codigo = $('#input-cupon').val().toUpperCase(); 
+            let idCliente = parseInt($('#id-cliente').val()); 
+            let msg = $('#msg-cupon');
+            
+            // Obtenemos la fecha de hoy en formato YYYY-MM-DD
+            let hoy = new Date();
+            let offset = hoy.getTimezoneOffset();
+            hoy = new Date(hoy.getTime() - (offset*60*1000));
+            let fechaHoy = hoy.toISOString().split('T')[0];
+
+            if(codigo.length === 0) { 
+                msg.hide(); 
+                $('#total-venta').attr('data-porc-desc', 0); 
+                calc(); 
+                return; 
+            }
+
+            // Buscamos el cupón en el array que viene de la BD
             let cupon = cuponesDB.find(c => c.codigo === codigo);
+
             if(cupon) {
-                if(cupon.id_cliente && cupon.id_cliente != idCliente) { msg.text('Cupón no válido para este cliente').attr('class','small fw-bold mt-1 text-danger').show(); $('#total-venta').attr('data-porc-desc', 0); } 
-                else { msg.text('Cupón ' + cupon.descuento_porcentaje + '% OK').attr('class','small fw-bold mt-1 text-success').show(); $('#total-venta').attr('data-porc-desc', cupon.descuento_porcentaje); }
-            } else { msg.text('Cupón inexistente').attr('class','small fw-bold mt-1 text-danger').show(); $('#total-venta').attr('data-porc-desc', 0); }
+                // 1. PRIORIDAD: VALIDAR VENCIMIENTO
+                if(cupon.fecha_limite < fechaHoy) {
+                    msg.text('❌ CUPÓN VENCIDO (' + cupon.fecha_limite + ')').attr('class','small fw-bold mt-1 text-danger').show();
+                    $('#total-venta').attr('data-porc-desc', 0);
+                } 
+                // 2. VALIDAR LÍMITE DE USOS
+                else if(parseInt(cupon.cantidad_limite) > 0 && parseInt(cupon.usos_actuales) >= parseInt(cupon.cantidad_limite)) {
+                    msg.text('❌ LÍMITE DE USOS AGOTADO').attr('class','small fw-bold mt-1 text-danger').show();
+                    $('#total-venta').attr('data-porc-desc', 0);
+                }
+                // 3. VALIDAR CLIENTE (SI TIENE UNO ASIGNADO)
+                else if(cupon.id_cliente && cupon.id_cliente != idCliente) {
+                    msg.text('❌ NO VÁLIDO PARA ESTE CLIENTE').attr('class','small fw-bold mt-1 text-danger').show();
+                    $('#total-venta').attr('data-porc-desc', 0);
+                } 
+                // 4. TODO CORRECTO
+                else {
+                    msg.text('✅ DESCUENTO ' + cupon.descuento_porcentaje + '% APLICADO').attr('class','small fw-bold mt-1 text-success').show();
+                    $('#total-venta').attr('data-porc-desc', cupon.descuento_porcentaje);
+                }
+            } else {
+                // Si no se encuentra el código en el array
+                msg.text('❌ CÓDIGO INEXISTENTE').attr('class','small fw-bold mt-1 text-danger').show();
+                $('#total-venta').attr('data-porc-desc', 0);
+            }
             calc();
         }
+
+
 
         function calc(){ 
             let subtotal = parseFloat($('#total-venta').attr('data-subtotal')) || 0;
@@ -736,47 +777,44 @@ if(parseFloat(p.precio_oferta) > 0) {
         window.abrirModalClientes = function() { $('#input-search-modal').val(''); $('#lista-clientes-modal').html(''); modalCliente.show(); setTimeout(()=>$('#input-search-modal').focus(),500); };
         
         // BUSCADOR DE CLIENTES (CORREGIDO PARA PASAR PUNTOS)
-        // BUSCADOR DE CLIENTES (CORREGIDO)
-        $('#input-search-modal').on('input', function() {
+        $('#input-search-modal').on('keyup', function() {
             let term = $(this).val(); 
-            if(term.length < 2) { $('#lista-clientes-modal').html(''); return; }
+            if(term.length < 2) return;
             
-            $.ajax({
-                url: 'acciones/buscar_cliente_ajax.php',
-                data: { term: term },
-                dataType: 'json',
-                success: function(res) {
-                    let html = ''; 
-                    if(res && res.length > 0) {
-                        res.forEach(c => { 
-                            let dni = c.dni ? c.dni : '--'; 
-                            let saldoVal = parseFloat(c.saldo) || 0;
-                            let saldoClass = saldoVal > 0 ? 'text-danger fw-bold' : (saldoVal < 0 ? 'text-success fw-bold' : 'text-muted');
-                            let saldoTexto = saldoVal > 0 ? 'Debe: $' + c.saldo : (saldoVal < 0 ? 'Favor: $' + Math.abs(saldoVal).toFixed(2) : 'Al día');
+            $.getJSON('acciones/buscar_cliente_ajax.php', { term: term }, function(res) {
+                let html = ''; 
+                if(res.length > 0) {
+                    res.forEach(c => { 
+                        let dni = c.dni ? c.dni : '--'; 
+                        
+                        let saldoVal = parseFloat(c.saldo.toString().replace(/,/g, '')) || 0;
+                        let saldoClass = saldoVal > 0 ? 'text-danger fw-bold' : (saldoVal < 0 ? 'text-success fw-bold' : 'text-muted');
+                        let saldoTexto = saldoVal > 0 ? 'Debe: $' + c.saldo : (saldoVal < 0 ? 'Favor: $' + Math.abs(saldoVal) : 'Al día');
 
-                            html += `
-                            <a href="#" class="list-group-item list-group-item-action p-3 border-bottom" 
-                               onclick="seleccionarCliente(${c.id}, '${c.nombre.replace(/'/g, "\\'")}', '${c.saldo}', '${c.puntos}')">
-                                <div class="d-flex w-100 justify-content-between align-items-center">
-                                    <div>
-                                        <h6 class="mb-1 fw-bold text-primary">${c.nombre}</h6>
-                                        <small class="text-muted"><i class="bi bi-person-vcard"></i> ${dni}</small>
-                                    </div>
-                                    <div class="text-end">
-                                        <div class="${saldoClass}" style="font-size:0.85rem;">${saldoTexto}</div>
-                                        <small class="text-warning fw-bold"><i class="bi bi-star-fill"></i> ${c.puntos} pts</small>
-                                    </div>
+                        html += `
+                        <a href="#" class="list-group-item list-group-item-action p-3 border-bottom" 
+                           onclick="seleccionarCliente(${c.id}, '${c.nombre}', '${c.saldo}', '${c.puntos}')">
+                            <div class="d-flex w-100 justify-content-between align-items-center">
+                                <div>
+                                    <h6 class="mb-1 fw-bold text-primary">${c.nombre}</h6>
+                                    <small class="text-muted"><i class="bi bi-person-vcard"></i> ${dni}</small>
                                 </div>
-                            </a>`; 
-                        });
-                    } else {
-                        html = '<div class="p-3 text-center text-muted">No se encontraron clientes.</div>';
-                    }
-                    $('#lista-clientes-modal').html(html);
-                },
-                error: function() { console.error("Error en el buscador de clientes"); }
+                                <div class="text-end">
+                                    <div class="${saldoClass}" style="font-size:0.85rem;">${saldoTexto}</div>
+                                    <small class="text-warning fw-bold"><i class="bi bi-star-fill"></i> ${c.puntos} pts</small>
+                                </div>
+                            </div>
+                        </a>`; 
+                    });
+                } else {
+                    html = '<div class="p-3 text-center text-muted">No se encontraron clientes.</div>';
+                }
+                $('#lista-clientes-modal').html(html);
             });
         });
+
+        // PROCESAR VENTA (FINALIZAR - CORREGIDO RUTA)
+        // PROCESAR VENTA (FINALIZAR)
         // PROCESAR VENTA (FINALIZAR)
         $('#btn-finalizar').click(function() {
             if(carrito.length === 0) return Swal.fire('Error', 'El carrito está vacío.', 'error');
@@ -830,6 +868,9 @@ if(parseFloat(p.precio_oferta) > 0) {
             <div class="d-grid gap-2 mt-3">
                 <button onclick="window.open('ticket.php?id=${idVenta}', 'pop-up', 'width=300,height=600')" class="btn btn-dark py-2">
                     <i class="bi bi-printer"></i> Imprimir Ticket
+                </button>
+                <button onclick="enviarTicketWhatsApp(${idVenta})" class="btn btn-success py-2">
+                    <i class="bi bi-whatsapp"></i> Enviar por WhatsApp
                 </button>
                 <button onclick="enviarTicketEmail(${idVenta})" class="btn btn-primary py-2">
                     <i class="bi bi-envelope"></i> Enviar por Correo

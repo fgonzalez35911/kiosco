@@ -17,6 +17,14 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $sql = "INSERT INTO cajas_sesion (id_usuario, fecha_apertura, monto_inicial, estado) VALUES (?, ?, ?, 'abierta')";
     $stmt = $conexion->prepare($sql);
     $stmt->execute([$usuario_id, $fecha, $monto_inicial]);
+    $id_caja_nueva = $conexion->lastInsertId();
+
+    // AUDITORÍA: APERTURA DE CAJA
+    try {
+        $detalles_audit = "Apertura de caja #" . $id_caja_nueva . " con monto inicial: $" . number_format($monto_inicial, 2);
+        $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'APERTURA', ?, NOW())")
+                 ->execute([$usuario_id, $detalles_audit]);
+    } catch (Exception $e) { }
     
     header("Location: ventas.php"); exit;
 }

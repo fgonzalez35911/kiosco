@@ -154,7 +154,7 @@ foreach($combos as $c) {
 }
 ?>
 
-<?php include 'includes/layout_header.php'; ?></div>
+<?php include 'includes/layout_header.php'; ?>
 
 <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
@@ -293,15 +293,21 @@ foreach($combos as $c) {
 
 <div class="modal fade" id="modalCrop" tabindex="-1" data-bs-backdrop="static"><div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-body p-0 bg-dark text-center"><img id="imageToCrop" src="" style="max-width: 100%;"></div><div class="modal-footer bg-dark border-0"><button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button><button type="button" class="btn btn-primary btn-sm" id="btnRecortar">RECORTAR</button></div></div></div></div>
 
-<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 
 <script>
     let cropper, prefijoGlobal;
-    const modalCrop = new bootstrap.Modal(document.getElementById('modalCrop'));
-    const modalEditar = new bootstrap.Modal(document.getElementById('modalEditar'));
+    let modalCrop, modalEditar;
+
+    // Esperamos a que el DOM y el footer carguen las librerías
+    document.addEventListener('DOMContentLoaded', function() {
+        if(typeof bootstrap !== 'undefined') {
+            modalCrop = new bootstrap.Modal(document.getElementById('modalCrop'));
+            modalEditar = new bootstrap.Modal(document.getElementById('modalEditar'));
+        }
+    });
     
     // DATOS SEGUROS
     const prodsDB = <?php echo $productos_json; ?>;

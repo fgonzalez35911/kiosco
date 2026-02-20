@@ -1,19 +1,30 @@
 <?php
-// dashboard.php - INICIO LIMPIO
+// dashboard.php - ANALOGÍAS FUTBOLERAS + WIDGETS CLAROS
 require_once 'includes/layout_header.php'; 
+require_once 'includes/db.php';
 
 $id_user = $_SESSION['usuario_id'];
-$rol_usuario = $_SESSION['rol'] ?? 3;
+// Recuperamos el rol. Si no está definido, asumimos empleado (3) para seguridad.
+$rol_usuario = $_SESSION['rol'] ?? 3; 
 
 // DATOS
 $hoy = date('Y-m-d');
 
-// Consulta unificada: Suma ventas de mostrador y rifas completadas del usuario hoy
+// 1. Suma de Ventas Brutas hoy
 $resVentas = $conexion->prepare("SELECT COALESCE(SUM(total),0) as total, COUNT(*) as cantidad FROM ventas WHERE id_usuario = ? AND DATE(fecha) = ? AND estado = 'completada'");
 $resVentas->execute([$id_user, $hoy]);
 $datosVentas = $resVentas->fetch(PDO::FETCH_ASSOC);
 
+// 2. Suma de Devoluciones hoy (Pérdida de hoy)
+$resDevs = $conexion->prepare("SELECT COALESCE(SUM(monto_devuelto),0) as total_dev FROM devoluciones WHERE id_usuario = ? AND DATE(fecha) = ?");
+$resDevs->execute([$id_user, $hoy]);
+$totalDevueltoHoy = $resDevs->fetch(PDO::FETCH_ASSOC)['total_dev'];
+
+// 3. Cálculo de la Venta Neta (La verdad del negocio)
+$venta_neta = $datosVentas['total'] - $totalDevueltoHoy;
+
 $estado_caja = $conexion->prepare("SELECT id FROM cajas_sesion WHERE id_usuario = ? AND estado = 'abierta'");
+
 $estado_caja->execute([$id_user]);
 $estado_caja = $estado_caja->fetch() ? 'ABIERTA' : 'CERRADA';
 
@@ -40,12 +51,20 @@ if($rol_usuario <= 2) {
         <a href="reportes.php?filtro=hoy" class="widget-stat">
             <span class="stat-label">Ventas Hoy</span>
             <div class="stat-value">
-                <?php if($rol_usuario <= 2): ?>
-                    $<?php echo number_format($datosVentas['total'],0,',','.'); ?>
-                <?php else: ?>
-                    *****
-                <?php endif; ?>
+    <?php if($rol_usuario <= 2): ?>
+        $<?php echo number_format($venta_neta, 0, ',', '.'); ?>
+        
+        <?php if($totalDevueltoHoy > 0): ?>
+            <div style="font-size: 0.65rem; opacity: 0.7; font-weight: normal; line-height: 1;">
+                (Bruto: $<?php echo number_format($datosVentas['total'], 0); ?> - Dev: $<?php echo number_format($totalDevueltoHoy, 0); ?>)
             </div>
+        <?php endif; ?>
+        
+    <?php else: ?>
+        *****
+    <?php endif; ?>
+</div>
+
             <i class="bi bi-currency-dollar stat-icon"></i>
         </a>
     </div>
@@ -134,34 +153,24 @@ if($rol_usuario <= 2) {
         </a>
     </div>
     <div class="col-6 col-md-4 col-lg-3">
-        <a href="devoluciones.php" class="card-menu">
-            <div class="icon-box-lg icon-rojo"><i class="bi bi-arrow-counterclockwise"></i></div>
-            <span class="menu-title">Devoluciones</span><span class="menu-sub">EXPULSIONES</span>
-        </a>
-    </div>
-    <div class="col-6 col-md-4 col-lg-3">
-        <a href="historial_cajas.php" class="card-menu">
-            <div class="icon-box-lg icon-azul"><i class="bi bi-clock-history"></i></div>
-            <span class="menu-title">Historial Caja</span><span class="menu-sub">EL REPECHAJE</span>
-        </a>
-    </div>
-    <div class="col-6 col-md-4 col-lg-3">
-        <a href="cierre_caja.php" class="card-menu">
-            <div class="icon-box-lg icon-amarillo"><i class="bi bi-calculator"></i></div>
-            <span class="menu-title">Cerrar Caja</span><span class="menu-sub">FIN DEL PARTIDO</span>
+        <a href="sorteos.php" class="card-menu">
+            <div class="icon-box-lg icon-violeta"><i class="bi bi-ticket-perforated-fill"></i></div>
+            <span class="menu-title">Sorteos</span><span class="menu-sub">RIFAS</span>
         </a>
     </div>
 </div>
 
 <?php if($rol_usuario <= 2): ?>
-<h5 class="font-cancha border-bottom pb-2 mb-3 text-secondary">FINANZAS</h5>
+<h5 class="font-cancha border-bottom pb-2 mb-3 text-secondary">FINANZAS Y MARKETING</h5>
 <div class="row g-3 mb-4">
+    
     <div class="col-6 col-md-4 col-lg-3">
-        <a href="ver_recaudacion.php" class="card-menu">
+        <a href="ver_recaudacion.php" class="card-menu" style="border: 2px solid #0d6efd;">
             <div class="icon-box-lg icon-azul"><i class="bi bi-safe-fill"></i></div>
-            <span class="menu-title">Recaudación Real</span><span class="menu-sub">EL TESORO</span>
+            <span class="menu-title fw-bold text-primary">Recaudación Real</span><span class="menu-sub text-primary">DETALLE CAJA</span>
         </a>
     </div>
+
     <div class="col-6 col-md-4 col-lg-3">
         <a href="gastos.php" class="card-menu">
             <div class="icon-box-lg icon-rojo"><i class="bi bi-cash-stack"></i></div>
@@ -175,59 +184,15 @@ if($rol_usuario <= 2) {
         </a>
     </div>
     <div class="col-6 col-md-4 col-lg-3">
-        <a href="mermas.php" class="card-menu">
-            <div class="icon-box-lg icon-rojo"><i class="bi bi-trash3"></i></div>
-            <span class="menu-title">Mermas</span><span class="menu-sub">BAJAS DEL EQUIPO</span>
+        <a href="gestionar_cupones.php" class="card-menu">
+            <div class="icon-box-lg icon-verde"><i class="bi bi-ticket-perforated"></i></div>
+            <span class="menu-title">Cupones</span><span class="menu-sub">BENEFICIOS SOCIOS</span>
         </a>
     </div>
-</div>
-
-<h5 class="font-cancha border-bottom pb-2 mb-3 text-secondary">EL CLUB DEL 10</h5>
-<div class="row g-3 mb-4">
-    <div class="col-6 col-md-4 col-lg-3">
-        <a href="canje_puntos.php" class="card-menu">
-            <div class="icon-box-lg icon-celeste"><i class="bi bi-gift-fill"></i></div>
-            <span class="menu-title">Canje de Puntos</span><span class="menu-sub">PREMIOS SOCIOS</span>
-        </a>
-    </div>
-    <div class="col-6 col-md-4 col-lg-3">
-        <a href="ver_encuestas.php" class="card-menu">
-            <div class="icon-box-lg icon-azul"><i class="bi bi-chat-quote"></i></div>
-            <span class="menu-title">Encuestas</span><span class="menu-sub">VOZ DEL HINCHA</span>
-        </a>
-    </div>
-    <div class="col-6 col-md-4 col-lg-3">
-        <a href="gestionar_premios.php" class="card-menu">
-            <div class="icon-box-lg icon-amarillo"><i class="bi bi-trophy"></i></div>
-            <span class="menu-title">Configurar Premios</span><span class="menu-sub">EL PALMARÉS</span>
-        </a>
-    </div>
-</div>
-
-<h5 class="font-cancha border-bottom pb-2 mb-3 text-secondary">MARKETING</h5>
-<div class="row g-3 mb-4">
     <div class="col-6 col-md-4 col-lg-3">
         <a href="revista_builder.php" class="card-menu">
             <div class="icon-box-lg icon-violeta"><i class="bi bi-magic"></i></div>
             <span class="menu-title">Revista Builder</span><span class="menu-sub">PIZARRA TÁCTICA</span>
-        </a>
-    </div>
-    <div class="col-6 col-md-4 col-lg-3">
-        <a href="gestionar_cupones.php" class="card-menu">
-            <div class="icon-box-lg icon-verde"><i class="bi bi-ticket-perforated"></i></div>
-            <span class="menu-title">Cupones</span><span class="menu-sub">ENTRADAS BONIFICADAS</span>
-        </a>
-    </div>
-    <div class="col-6 col-md-4 col-lg-3">
-        <a href="sorteos.php" class="card-menu">
-            <div class="icon-box-lg icon-violeta"><i class="bi bi-ticket-perforated-fill"></i></div>
-            <span class="menu-title">Sorteos y Rifas</span><span class="menu-sub">EL PRODE</span>
-        </a>
-    </div>
-    <div class="col-6 col-md-4 col-lg-3">
-        <a href="tienda.php" target="_blank" class="card-menu">
-            <div class="icon-box-lg icon-celeste"><i class="bi bi-shop"></i></div>
-            <span class="menu-title">Tienda Online</span><span class="menu-sub">MERCHANDISING</span>
         </a>
     </div>
 </div>
@@ -256,12 +221,6 @@ if($rol_usuario <= 2) {
         <a href="auditoria.php" class="card-menu">
             <div class="icon-box-lg icon-rojo"><i class="bi bi-eye"></i></div>
             <span class="menu-title">Auditoría</span><span class="menu-sub">EL VAR</span>
-        </a>
-    </div>
-    <div class="col-6 col-md-4 col-lg-3">
-        <a href="restaurar_sistema.php" class="card-menu">
-            <div class="icon-box-lg icon-azul"><i class="bi bi-bootstrap-reboot"></i></div>
-            <span class="menu-title">Restaurar Backups</span><span class="menu-sub">VOLVER AL PASADO</span>
         </a>
     </div>
 </div>

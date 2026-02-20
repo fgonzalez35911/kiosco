@@ -92,6 +92,8 @@ $colores_cat = ['#e60023', '#007bff', '#28a745', '#fd7e14', '#6610f2', '#6f42c1'
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
     <link href="https://fonts.googleapis.com/css2?family=Anton&family=Bebas+Neue&family=Poppins:wght@300;400;600;800&display=swap" rel="stylesheet">
+    .swal2-container { z-index: 20001 !important; }
+    
     
     <style>
         :root { --dark-bg: #1a1a1a; --header-h: 60px; --footer-h: 70px; }
@@ -429,9 +431,10 @@ $colores_cat = ['#e60023', '#007bff', '#28a745', '#fd7e14', '#6610f2', '#6f42c1'
         </div>
 
         <button class="btn-plus" 
-            ontouchstart="event.stopPropagation(); addCart(<?php echo $p['id']; ?>, '<?php echo addslashes($p['descripcion']); ?>', <?php echo $precio_final; ?>); return false;"
-            onmousedown="event.stopPropagation();"
-            onclick="event.stopPropagation(); addCart(<?php echo $p['id']; ?>, '<?php echo addslashes($p['descripcion']); ?>', <?php echo $precio_final; ?>);">
+    ontouchstart="event.stopPropagation(); addCart(<?php echo $p['id']; ?>, '<?php echo addslashes($p['descripcion']); ?>', <?php echo $precio_final; ?>, <?php echo $p['stock_actual']; ?>); return false;"
+    onmousedown="event.stopPropagation();"
+    onclick="event.stopPropagation(); addCart(<?php echo $p['id']; ?>, '<?php echo addslashes($p['descripcion']); ?>', <?php echo $precio_final; ?>, <?php echo $p['stock_actual']; ?>);">
+
             <i class="bi bi-plus-lg"></i>
         </button>
         
@@ -554,6 +557,7 @@ $colores_cat = ['#e60023', '#007bff', '#28a745', '#fd7e14', '#6610f2', '#6f42c1'
                 <div class="modal-footer border-top-0 pt-0">
                     <div class="botones-container">
                         <button class="btn btn-outline-danger w-50 rounded-pill" onclick="clearCart()">Vaciar</button>
+
                         <button class="btn btn-success w-50 fw-bold rounded-pill" onclick="sendWA()">
                             <i class="bi bi-whatsapp"></i> ENVIAR
                         </button>
@@ -646,13 +650,24 @@ $colores_cat = ['#e60023', '#007bff', '#28a745', '#fd7e14', '#6610f2', '#6f42c1'
             updBadge();
         }
 
-        function addCart(id, n, p) {
-            let ex = cart.find(i => i.id == id);
-            if(ex) ex.cant++; else cart.push({id, nombre:n, precio:p, cant:1});
-            save(); updBadge();
-            // Toast muy visible
-            Swal.fire({toast:true, position:'top', icon:'success', title:'¡Agregado!', timer:800, showConfirmButton:false, background:'#28a745', color:'#fff'});
+        function addCart(id, n, p, s) {
+    let ex = cart.find(i => i.id == id);
+    if(ex) {
+        if(ex.cant + 1 > s) {
+            const Toast = Swal.mixin({toast: true, position: 'top', showConfirmButton: false, timer: 2000, background: '#dc3545', color: '#fff'});
+            Toast.fire({icon: 'error', title: 'Sin stock suficiente ('+s+' disp.)'});
+            return;
         }
+        ex.cant++;
+    } else { 
+        if(s <= 0) return;
+        cart.push({id, nombre:n, precio:p, cant:1, stock_max:s}); 
+    }
+    save(); updBadge();
+    const Toast = Swal.mixin({toast: true, position: 'top', showConfirmButton: false, timer: 1000, background: '#28a745', color: '#fff'});
+    Toast.fire({icon: 'success', title: '¡Agregado!'});
+}
+
 
         function openCart() {
             let html = '', tot=0;
@@ -676,11 +691,41 @@ $colores_cat = ['#e60023', '#007bff', '#28a745', '#fd7e14', '#6610f2', '#6f42c1'
             modalCart.show();
         }
 
-        function mod(x,d) {
-            cart[x].cant+=d; if(cart[x].cant<=0) cart.splice(x,1);
-            save(); updBadge(); openCart();
+        function mod(x, v) {
+    let item = cart[x];
+    if(v > 0 && item.cant + v > item.stock_max) {
+        const Toast = Swal.mixin({toast: true, position: 'top', showConfirmButton: false, timer: 2000, background: '#dc3545', color: '#fff'});
+        Toast.fire({icon: 'error', title: 'Límite de stock: ' + item.stock_max});
+        return;
+    }
+    item.cant += v;
+    if(item.cant <= 0) cart.splice(x, 1);
+    save(); updBadge(); openCart();
+}
+        function clearCart() {
+    Swal.fire({
+        title: '¿Vaciar pedido?',
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#e60023',
+        cancelButtonColor: '#6c757d',
+        confirmButtonText: 'SÍ, VACIAR',
+        cancelButtonText: 'VOLVER'
+    }).then((result) => {
+        if (result.isConfirmed) {
+            cart = [];
+            save();
+            updBadge();
+            // Actualizar modal si está abierto
+            if(document.getElementById('cartList')) {
+                document.getElementById('cartList').innerHTML = '<p class="text-center text-muted py-3">Tu carrito está vacío</p>';
+                document.getElementById('cartTotal').innerText = '$0';
+            }
+            Swal.fire({ toast: true, position: 'top', icon: 'success', title: 'Carrito vacío', showConfirmButton: false, timer: 1500 });
         }
-        function clearCart() { cart=[]; save(); updBadge(); openCart(); }
+    });
+}
+
         function save() { localStorage.setItem('carrito_kiosco', JSON.stringify(cart)); }
         function updBadge() { document.getElementById('badgeCount').innerText = cart.reduce((s,i)=>s+i.cant,0); }
         

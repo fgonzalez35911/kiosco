@@ -34,11 +34,11 @@ try {
         // AGREGAMOS DROP TABLE PARA EVITAR CONFLICTOS AL RESTAURAR
         $return .= "DROP TABLE IF EXISTS `$table`;\n";
         
-        $result = $conexion->query("SHOW CREATE TABLE `$table` text");
+        $result = $conexion->query("SHOW CREATE TABLE `$table` ");
         $row = $result->fetch(PDO::FETCH_NUM);
         $return .= "\n\n" . $row[1] . ";\n\n";
 
-        $result = $conexion->query("SELECT * FROM `$table` text");
+        $result = $conexion->query("SELECT * FROM `$table` ");
         $num_fields = $result->columnCount();
 
         while ($row = $result->fetch(PDO::FETCH_NUM)) {
@@ -67,6 +67,12 @@ try {
     header('Content-Type: application/octet-stream');
     header("Content-Transfer-Encoding: Binary");
     header("Content-disposition: attachment; filename=\"" . $nombre_archivo . "\"");
+
+    // AUDITORÍA: REGISTRO DE RESPALDO GENERADO
+    try {
+        $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'BACKUP', 'Copia de seguridad completa generada y descargada.', NOW())")
+                 ->execute([$_SESSION['usuario_id']]);
+    } catch (Exception $e) { }
     
     echo $return;
     exit;

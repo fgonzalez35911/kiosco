@@ -14,7 +14,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $user = $stmt->fetch();
 
     if ($user && password_verify($password, $user->password)) {
-        if ($user->activo == 0) { header("Location: index.php?error=inactivo"); exit; }
+        if ($user->activo == 0) { 
+            // Auditoría: Intento de ingreso con cuenta desactivada
+            $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'LOGIN_BLOQUEADO', 'Intento de ingreso con cuenta desactivada', NOW())")->execute([$user->id]);
+            header("Location: index.php?error=inactivo"); 
+            exit; 
+        }
 
         // DATOS BÁSICOS
         $_SESSION['usuario_id'] = $user->id;
@@ -35,6 +40,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         $_SESSION['permisos'] = $stmtPermisos->fetchAll(PDO::FETCH_COLUMN);
         // --------------------------------------
 
+        // Auditoría: Login Exitoso
+        $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'LOGIN', 'Inicio de sesión exitoso', NOW())")->execute([$user->id]);
+
         // Asistencia
         $_SESSION['hora_ingreso'] = time();
         try {
@@ -53,7 +61,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         // ---------------------------------------------
 
     } else {
-        header("Location: index.php?error=incorrecto");
+        // Auditoría: Login Fallido
+        if ($user) {
+            // Contraseña mal pero usuario existe
+            $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'LOGIN_FALLIDO', 'Contraseña incorrecta', NOW())")->execute([$user->id]);
+        } else {
+            // Usuario ni siquiera existe (usamos ID 1 del SuperAdmin para dejar rastro)
+            $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (1, 'LOGIN_FALLIDO', 'Intento de ingreso fallido. Usuario no existe: $usuario', NOW())")->execute();
+        }
+        header("Location: index.php?error=1");
         exit;
     }
 } else {

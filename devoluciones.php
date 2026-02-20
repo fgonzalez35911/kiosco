@@ -44,11 +44,24 @@ if (isset($_POST['devolver'])) {
         $stmtV->execute([$id_venta]);
         $ventaOriginal = $stmtV->fetch(PDO::FETCH_ASSOC);
 
-        $stmt = $conexion->prepare("INSERT INTO devoluciones (id_venta_original, id_producto, cantidad, monto_devuelto, fecha, id_usuario) VALUES (?, ?, ?, ?, NOW(), ?)");
-        $stmt->execute([$id_venta, $id_producto, $cantidad, $monto, $user_id]);
+                $motivo_dev = $_POST['motivo_dev'] ?? 'Reingreso'; // Recibimos el motivo del modal que haremos luego
+        
+        // 1. Registramos la devolución incluyendo el motivo real
+        $stmt = $conexion->prepare("INSERT INTO devoluciones (id_venta_original, id_producto, cantidad, monto_devuelto, motivo, fecha, id_usuario) VALUES (?, ?, ?, ?, ?, NOW(), ?)");
+        $stmt->execute([$id_venta, $id_producto, $cantidad, $monto, $motivo_dev, $user_id]);
 
-        $stmtUP = $conexion->prepare("UPDATE productos SET stock_actual = stock_actual + ? WHERE id = ?");
-        $stmtUP->execute([$cantidad, $id_producto]);
+        // 2. Decisión de Stock vs Merma
+        if ($motivo_dev === 'Reingreso') {
+            // Si está bien, vuelve al stock disponible para la venta
+            $stmtUP = $conexion->prepare("UPDATE productos SET stock_actual = stock_actual + ? WHERE id = ?");
+            $stmtUP->execute([$cantidad, $id_producto]);
+        } else {
+            // Si está roto o vencido, NO vuelve al stock. Se registra como Merma.
+            $motivo_merma = "Devolución Ticket #$id_venta: $motivo_dev";
+            $stmtM = $conexion->prepare("INSERT INTO mermas (id_producto, cantidad, motivo, fecha, id_usuario) VALUES (?, ?, ?, NOW(), ?)");
+            $stmtM->execute([$id_producto, $cantidad, $motivo_merma, $user_id]);
+        }
+
 
         if ($ventaOriginal) {
             if ($ventaOriginal['metodo_pago'] === 'CtaCorriente' && $ventaOriginal['id_cliente'] > 1) {

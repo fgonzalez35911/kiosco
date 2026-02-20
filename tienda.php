@@ -96,6 +96,9 @@ $deg_dir = '135deg';
         /* ESTILOS FORMULARIO MODAL */
         .form-label-sm { font-size: 0.85rem; font-weight: 600; margin-bottom: 2px; }
         .form-control-sm { font-size: 0.9rem; padding: 8px; }
+        /* Asegurar que SweetAlert esté por encima del modal de 10000 */
+.swal2-container { z-index: 20001 !important; }
+        
     </style>
 </head>
 <body>
@@ -205,9 +208,10 @@ $deg_dir = '135deg';
                                     <?php endif; ?>
                                 </div>
                                 
-                                <button class="btn-add-circle" onclick="addCart(<?php echo $p['id']; ?>, '<?php echo addslashes($p['descripcion']); ?>', <?php echo $precio_final; ?>)">
-                                    <i class="bi bi-plus-lg"></i>
-                                </button>
+                                <button class="btn-add-circle" onclick="addCart(<?php echo $p['id']; ?>, '<?php echo addslashes($p['descripcion']); ?>', <?php echo $precio_final; ?>, <?php echo $p['stock_actual']; ?>)">
+    <i class="bi bi-plus-lg"></i>
+</button>
+
                             </div>
                         </div>
                     </div>
@@ -267,6 +271,7 @@ $deg_dir = '135deg';
                 <div class="modal-footer flex-column align-items-stretch border-top-0 pt-0">
                     <div class="d-flex gap-2 w-100 mt-2">
                         <button class="btn btn-outline-danger w-50 rounded-pill" onclick="clearCart()">Vaciar</button>
+
                         <button class="btn btn-success w-50 fw-bold rounded-pill" onclick="sendWA()">
                             <i class="bi bi-whatsapp"></i> ENVIAR
                         </button>
@@ -291,15 +296,69 @@ $deg_dir = '135deg';
             updBadge();
         }
 
-        function addCart(id, n, p) {
-            let ex = cart.find(i => i.id == id);
-            if(ex) ex.cant++; else cart.push({id, nombre:n, precio:p, cant:1});
-            save(); updBadge();
-            const Toast = Swal.mixin({toast: true, position: 'top', showConfirmButton: false, timer: 1000, background: '#28a745', color: '#fff'});
-            Toast.fire({icon: 'success', title: '¡Agregado!'});
+        function addCart(id, n, p, s) {
+    let ex = cart.find(i => i.id == id);
+    // Si ya existe y el siguiente click supera el stock (y no es combo ilimitado)
+    if(ex) {
+        if(ex.cant + 1 > s) {
+            const Toast = Swal.mixin({toast: true, position: 'top', showConfirmButton: false, timer: 2000, background: '#dc3545', color: '#fff'});
+            Toast.fire({icon: 'error', title: 'Sin stock suficiente ('+s+' disp.)'});
+            return;
         }
+        ex.cant++;
+    } else { 
+        // Si es el primero, verificamos que al menos haya 1 (aunque el SQL ya filtra, por seguridad)
+        if(s <= 0) {
+            const Toast = Swal.mixin({toast: true, position: 'top', showConfirmButton: false, timer: 2000, background: '#dc3545', color: '#fff'});
+            Toast.fire({icon: 'error', title: 'Producto sin stock'});
+            return;
+        }
+        cart.push({id, nombre:n, precio:p, cant:1, stock_max:s}); 
+    }
+        save(); updBadge();
+    const Toast = Swal.mixin({toast: true, position: 'top', showConfirmButton: false, timer: 1000, background: '#28a745', color: '#fff'});
+    Toast.fire({icon: 'success', title: '¡Agregado!'});
+}
 
-        function openCart() {
+// --- FUNCIONES VITALES DE SINCRONIZACIÓN ---
+function save() {
+    localStorage.setItem('carrito_kiosco', JSON.stringify(cart));
+}
+
+function updBadge() {
+    let count = cart.reduce((acc, item) => acc + parseInt(item.cant), 0);
+    document.getElementById('badgeCount').innerText = count;
+}
+
+function clearCart() {
+    Swal.fire({
+        title: '¿Vaciar carrito?',
+        text: "Se eliminarán todos los productos seleccionados.",
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#dc3545',
+        cancelButtonColor: '#6c757d',
+        confirmButtonText: 'SÍ, VACIAR',
+        cancelButtonText: 'CANCELAR'
+    }).then((result) => {
+        if (result.isConfirmed) {
+            cart = [];
+            save();
+            updBadge();
+            // Refrescar la lista visual
+            let list = document.getElementById('cartList');
+            if(list) list.innerHTML = '<p class="text-center text-muted py-3">Tu carrito está vacío</p>';
+            document.getElementById('cartTotal').innerText = '$0';
+            
+            const Toast = Swal.mixin({toast: true, position: 'top', showConfirmButton: false, timer: 1500, background: '#dc3545', color: '#fff'});
+            Toast.fire({icon: 'success', title: 'Carrito vaciado'});
+        }
+    });
+}
+
+
+function openCart() {
+
             let html = '', tot=0;
             if(cart.length==0) html='<p class="text-center text-muted py-3">Tu carrito está vacío</p>';
             else {
@@ -321,14 +380,18 @@ $deg_dir = '135deg';
             modalCart.show();
         }
 
-        function mod(x,d) { cart[x].cant+=d; if(cart[x].cant<=0) cart.splice(x,1); save(); updBadge(); openCart(); }
-        function clearCart() { cart=[]; save(); updBadge(); openCart(); }
-        function save() { localStorage.setItem('carrito_kiosco', JSON.stringify(cart)); }
-        function updBadge() { 
-            let c = cart.reduce((s,i)=>s+i.cant,0);
-            document.getElementById('badgeCount').innerText = c;
-            document.getElementById('badgeCount').style.display = c > 0 ? 'flex' : 'none';
-        }
+        function mod(x, v) {
+    let item = cart[x];
+    if(v > 0 && item.cant + v > item.stock_max) {
+        const Toast = Swal.mixin({toast: true, position: 'top', showConfirmButton: false, timer: 2000, background: '#dc3545', color: '#fff'});
+        Toast.fire({icon: 'error', title: 'Límite de stock alcanzado'});
+        return;
+    }
+    item.cant += v;
+    if(item.cant <= 0) cart.splice(x, 1);
+    save(); updBadge(); openCart();
+}
+
         
         // --- FUNCIÓN WHATSAPP MEJORADA ---
         function sendWA() {

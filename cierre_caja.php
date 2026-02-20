@@ -88,6 +88,13 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $stmt = $conexion->prepare($sqlCierre);
     $stmt->execute([$total_fisico, $total_entradas, $diferencia, $fecha_actual, $id_sesion]);
     
+    // AUDITORÍA: CIERRE DE CAJA
+    try {
+        $detalles_audit = "Cierre de caja #" . $id_sesion . ". Monto declarado: $" . number_format($total_fisico, 2) . " | Diferencia: $" . number_format($diferencia, 2);
+        $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'CIERRE', ?, NOW())")
+                 ->execute([$usuario_id, $detalles_audit]);
+    } catch (Exception $e) { }
+
     $cierre_exitoso = true;
     
     $clase_dif = ($diferencia < 0) ? 'text-danger' : 'text-success';

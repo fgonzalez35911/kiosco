@@ -32,6 +32,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     
     $stmt = $conexion->prepare("INSERT INTO gastos (descripcion, monto, categoria, fecha, id_usuario, id_caja_sesion) VALUES (?, ?, ?, NOW(), ?, ?)");
     $stmt->execute([$desc, $monto, $cat, $_SESSION['usuario_id'], $id_caja_sesion]);
+    $id_gasto_nuevo = $conexion->lastInsertId();
+
+    // AUDITORÍA: REGISTRO DE GASTO
+    try {
+        $detalles_audit = "Gasto registrado (#" . $id_gasto_nuevo . ") en categoría '" . $cat . "' por $" . number_format($monto, 2) . ". Detalle: " . $desc;
+        $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'GASTO', ?, NOW())")
+                 ->execute([$_SESSION['usuario_id'], $detalles_audit]);
+    } catch (Exception $e) { }
+
     header("Location: gastos.php?msg=ok"); exit;
 }
 

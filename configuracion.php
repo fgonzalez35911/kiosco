@@ -13,61 +13,90 @@ if (!isset($_SESSION['usuario_id'])) { header("Location: index.php"); exit; }
 
 // --- 1. PROCESAR GUARDADO CONFIGURACIÓN GENERAL ---
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['guardar_general'])) {
-    // VALIDACIÓN QUIRÚRGICA DE SEGURIDAD
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         die("Error de seguridad: Solicitud no autorizada.");
     }
-    $nombre = trim($_POST['nombre_negocio']);
-    $direccion = trim($_POST['direccion']);
-    $telefono = trim($_POST['telefono']);
-    $wa_pedidos = trim($_POST['whatsapp_pedidos']);
-    $cuit = trim($_POST['cuit']);
-    $mensaje = trim($_POST['mensaje_ticket']);
-    
-    // NUEVO: Color del sistema
-    $color_principal = $_POST['color_principal'] ?? '#102A57';
 
-    $mod_cli = isset($_POST['modulo_clientes']) ? 1 : 0;
-    $mod_stk = isset($_POST['modulo_stock']) ? 1 : 0;
-    $mod_rep = isset($_POST['modulo_reportes']) ? 1 : 0;
-    $mod_fid = isset($_POST['modulo_fidelizacion']) ? 1 : 0;
-    
-    $stock_use_global = isset($_POST['stock_use_global']) ? 1 : 0;
-    $stock_global_valor = intval($_POST['stock_global_valor'] ?? 5);
-    $ticket_modo = $_POST['ticket_modo'] ?? 'afip';
-    $redondeo_auto = isset($_POST['redondeo_auto']) ? 1 : 0;
+    try {
+        // 1. OBTENER DATOS ACTUALES PARA COMPARACIÓN QUIRÚRGICA
+        $old = $conexion->query("SELECT * FROM configuracion LIMIT 1")->fetch(PDO::FETCH_ASSOC);
 
-    $dias_alerta = intval($_POST['dias_alerta_vencimiento'] ?? 30);
-    $dinero_punto = floatval($_POST['dinero_por_punto'] ?? 100);
+        // 2. CAPTURAR NUEVOS VALORES
+        $n = [
+            'nombre_negocio' => trim($_POST['nombre_negocio']),
+            'direccion_local' => trim($_POST['direccion']),
+            'telefono_whatsapp' => trim($_POST['telefono']),
+            'whatsapp_pedidos' => trim($_POST['whatsapp_pedidos']),
+            'cuit' => trim($_POST['cuit']),
+            'mensaje_ticket' => trim($_POST['mensaje_ticket']),
+            'dinero_por_punto' => floatval($_POST['dinero_por_punto'] ?? 100),
+            'dias_alerta_vencimiento' => intval($_POST['dias_alerta_vencimiento'] ?? 30),
+            'color_barra_nav' => $_POST['color_principal'] ?? '#102A57',
+            'modulo_clientes' => isset($_POST['modulo_clientes']) ? 1 : 0,
+            'modulo_stock' => isset($_POST['modulo_stock']) ? 1 : 0,
+            'modulo_reportes' => isset($_POST['modulo_reportes']) ? 1 : 0,
+            'modulo_fidelizacion' => isset($_POST['modulo_fidelizacion']) ? 1 : 0,
+            'stock_use_global' => isset($_POST['stock_use_global']) ? 1 : 0,
+            'stock_global_valor' => intval($_POST['stock_global_valor'] ?? 5),
+            'ticket_modo' => $_POST['ticket_modo'] ?? 'afip',
+            'redondeo_auto' => isset($_POST['redondeo_auto']) ? 1 : 0
+        ];
 
-    $logo_url = $_POST['logo_actual']; 
-    if (isset($_FILES['logo']) && $_FILES['logo']['error'] === UPLOAD_ERR_OK) {
-        $nombre_archivo = 'logo_' . time() . '.png';
-        $destino = 'uploads/' . $nombre_archivo;
-        if(!is_dir('uploads')) mkdir('uploads');
-        if (move_uploaded_file($_FILES['logo']['tmp_name'], $destino)) {
-            $logo_url = $destino;
+        $logo_url = $_POST['logo_actual']; 
+        if (isset($_FILES['logo']) && $_FILES['logo']['error'] === UPLOAD_ERR_OK) {
+            $destino = 'uploads/logo_' . time() . '.png';
+            if (move_uploaded_file($_FILES['logo']['tmp_name'], $destino)) { $logo_url = $destino; }
         }
-    }
 
-   // ACTUALIZAMOS LA BASE DE DATOS INCLUYENDO EL COLOR
-   $sql = "UPDATE configuracion SET 
-            nombre_negocio=?, direccion_local=?, telefono_whatsapp=?, whatsapp_pedidos=?, cuit=?, mensaje_ticket=?, 
-            modulo_clientes=?, modulo_stock=?, modulo_reportes=?, modulo_fidelizacion=?, logo_url=?,
-            dias_alerta_vencimiento=?, dinero_por_punto=?,
-            stock_use_global=?, stock_global_valor=?, ticket_modo=?, redondeo_auto=?,
-            color_principal=? 
-            WHERE id=1";
+        // 3. COMPARACIÓN DE CADA CAMPO (TRAZABILIDAD TOTAL)
+        $cambios = [];
+        $map = [
+            'nombre_negocio' => 'Nombre', 'direccion_local' => 'Dirección', 'telefono_whatsapp' => 'Tel', 
+            'whatsapp_pedidos' => 'WA Pedidos', 'cuit' => 'CUIT', 'mensaje_ticket' => 'Msg Ticket',
+            'dinero_por_punto' => 'Valor Punto', 'dias_alerta_vencimiento' => 'Alerta Venc.',
+            'color_barra_nav' => 'Color', 'modulo_clientes' => 'Mod. Clientes', 'modulo_stock' => 'Mod. Stock',
+            'modulo_reportes' => 'Mod. Reportes', 'modulo_fidelizacion' => 'Mod. Puntos',
+            'stock_use_global' => 'Uso Stock Global', 'stock_global_valor' => 'Valor Stock Global',
+            'ticket_modo' => 'Modo Ticket', 'redondeo_auto' => 'Redondeo Auto'
+        ];
 
-    $conexion->prepare($sql)->execute([
-        $nombre, $direccion, $telefono, $wa_pedidos, $cuit, $mensaje, 
-        $mod_cli, $mod_stk, $mod_rep, $mod_fid, $logo_url,
-        $dias_alerta, $dinero_punto,
-        $stock_use_global, $stock_global_valor, $ticket_modo, $redondeo_auto,
-        $color_principal
-    ]);
-    
-    header("Location: configuracion.php?msg=guardado"); exit;
+        foreach ($map as $campo => $label) {
+            if ($old[$campo] != $n[$campo]) {
+                $v_old = ($old[$campo] === "1" || $old[$campo] === "0") ? ($old[$campo] ? 'ON' : 'OFF') : $old[$campo];
+                $v_new = ($n[$campo] === 1 || $n[$campo] === 0) ? ($n[$campo] ? 'ON' : 'OFF') : $n[$campo];
+                $cambios[] = "$label: $v_old -> $v_new";
+            }
+        }
+        if ($old['logo_url'] != $logo_url) $cambios[] = "Logo: Actualizado";
+
+        // 4. EJECUTAR UPDATE ÚNICO
+        $sql = "UPDATE configuracion SET 
+                nombre_negocio=?, direccion_local=?, telefono_whatsapp=?, whatsapp_pedidos=?, cuit=?, mensaje_ticket=?, 
+                modulo_clientes=?, modulo_stock=?, modulo_reportes=?, modulo_fidelizacion=?, logo_url=?,
+                dias_alerta_vencimiento=?, dinero_por_punto=?,
+                stock_use_global=?, stock_global_valor=?, ticket_modo=?, redondeo_auto=?,
+                color_barra_nav=? WHERE id=1";
+
+        $conexion->prepare($sql)->execute([
+            $n['nombre_negocio'], $n['direccion_local'], $n['telefono_whatsapp'], $n['whatsapp_pedidos'], $n['cuit'], $n['mensaje_ticket'],
+            $n['modulo_clientes'], $n['modulo_stock'], $n['modulo_reportes'], $n['modulo_fidelizacion'], $logo_url,
+            $n['dias_alerta_vencimiento'], $n['dinero_por_punto'],
+            $n['stock_use_global'], $n['stock_global_valor'], $n['ticket_modo'], $n['redondeo_auto'],
+            $n['color_barra_nav']
+        ]);
+
+        // 5. REGISTRAR EN CAJA NEGRA
+        if (!empty($cambios)) {
+            $detalles_audit = implode(" | ", $cambios);
+            $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'CONFIG_EDITADA', ?, NOW())")
+                     ->execute([$_SESSION['usuario_id'], $detalles_audit]);
+            
+            $_SESSION['nombre_negocio'] = $n['nombre_negocio'];
+            $_SESSION['color_barra_nav'] = $n['color_barra_nav'];
+        }
+
+        header("Location: configuracion.php?msg=guardado"); exit;
+    } catch (Exception $e) { die("Error: " . $e->getMessage()); }
 }
 
 // --- 2. PROCESAR GUARDADO AFIP ---
@@ -98,42 +127,39 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['guardar_afip'])) {
         }
     }
 
-    $conexion->prepare("UPDATE afip_config SET cuit=?, punto_venta=?, modo=? WHERE id=1")->execute([$cuit_afip, $pto_vta, $modo]);
-    $conexion->query("UPDATE afip_config SET token=NULL, sign=NULL WHERE id=1");
+    try {
+        $conexion->prepare("UPDATE afip_config SET cuit=?, punto_venta=?, modo=? WHERE id=1")->execute([$cuit_afip, $pto_vta, $modo]);
+        $conexion->query("UPDATE afip_config SET token=NULL, sign=NULL WHERE id=1");
 
-    header("Location: configuracion.php?msg=afip_ok"); exit;
+        // AUDITORÍA: CONFIGURACIÓN AFIP
+        $detalles_audit = "Actualización de parámetros AFIP. CUIT: " . $cuit_afip . " | Pto Vta: " . $pto_vta . " | Modo: " . strtoupper($modo);
+        $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'CONFIG_AFIP', ?, NOW())")
+                 ->execute([$_SESSION['usuario_id'], $detalles_audit]);
+
+        header("Location: configuracion.php?msg=afip_ok"); 
+        exit;
+    } catch (Exception $e) {
+        die("Error al guardar configuración AFIP: " . $e->getMessage());
+    }
 }
 
 // 3. OBTENER DATOS
-$conf = $conexion->query("SELECT * FROM configuracion WHERE id=1")->fetch(PDO::FETCH_ASSOC);
+$conf = $conexion->query("SELECT * FROM configuracion LIMIT 1")->fetch(PDO::FETCH_ASSOC);
 $afip = $conexion->query("SELECT * FROM afip_config WHERE id=1")->fetch(PDO::FETCH_ASSOC);
 
 // Color por defecto si no existe en BD
-$color_sistema = $conf['color_principal'] ?? '#102A57';
+// Leemos la columna real de tu base de datos (color_barra_nav)
+$color_sistema = $conf['color_barra_nav'] ?? '#102A57';
 
 include 'includes/layout_header.php'; ?>
 
-</div> 
-
-<style>
-    /* Estilos específicos dinámicos para las pestañas de esta página */
-    .nav-tabs .nav-link { color: #6c757d; font-weight: 600; border: none; }
-    .nav-tabs .nav-link.active { 
-        color: <?php echo $color_sistema; ?>; 
-        border-bottom: 3px solid <?php echo $color_sistema; ?>; 
-        background: transparent; 
-        
-    }
-    
-</style>
-
-<div class="header-blue" style="background-color: <?php echo $color_sistema; ?> !important; background: <?php echo $color_sistema; ?> !important; border-radius: 0 !important; width: 100%;">
+<div class="header-blue" style="background-color: <?php echo $color_sistema; ?> !important; padding: 40px 0; border-radius: 0;">
     <i class="bi bi-gear bg-icon-large"></i>
     <div class="container position-relative">
         <div class="d-flex justify-content-between align-items-start mb-4">
             <div>
                 <h2 class="font-cancha mb-0 text-white">Panel de Configuración</h2>
-                <p class="opacity-75 mb-0 text-white small">Ajustes generales y facturación electrónica del sistema.</p>
+                <p class="opacity-75 mb-0 text-white small text-white">Gestión integral de parámetros institucionales y AFIP.</p>
             </div>
         </div>
 
@@ -181,9 +207,7 @@ include 'includes/layout_header.php'; ?>
     </div>
 </div>
 
-<div class="container pb-5">
-
-<div class="container pb-5">
+<div class="container py-5">
     <ul class="nav nav-tabs mb-4" id="configTab" role="tablist">
         <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#general">🏢 General</button></li>
         <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#afip">🧾 Facturación AFIP</button></li>
@@ -257,7 +281,8 @@ include 'includes/layout_header.php'; ?>
                                     <div class="d-flex flex-wrap gap-4">
                                         <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="modulo_stock" <?php echo $conf['modulo_stock']?'checked':''; ?>><label class="small ms-2">Stock</label></div>
                                         <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="modulo_clientes" <?php echo $conf['modulo_clientes']?'checked':''; ?>><label class="small ms-2">Clientes</label></div>
-                                        <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="modulo_fidelizacion" <?php echo $conf['modulo_fidelizacion']?'checked':''; ?>><label class="small ms-2">Puntos</label></div>
+                                        <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="modulo_reportes" <?php echo $conf['modulo_reportes']?'checked':''; ?>><label class="small ms-2">Reportes</label></div>
+                                        <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="modulo_fidelizacion" <?php echo $conf['modulo_fidelizacion']?'checked':''; ?>><label class="small ms-2">Fidelización</label></div>
                                     </div>
                                     <hr class="my-2">
                                     <div class="form-check form-switch">
@@ -348,11 +373,28 @@ include 'includes/layout_header.php'; ?>
     </div>
 </div>
 
-<?php 
-if(isset($_GET['msg'])) {
-    $m = $_GET['msg'];
-    if($m == 'guardado') echo "<script>Swal.fire('Éxito', 'Configuración guardada', 'success');</script>";
-    if($m == 'afip_ok') echo "<script>Swal.fire('AFIP', 'Datos de facturación listos', 'success');</script>";
-}
-include 'includes/layout_footer.php'; 
-?>
+<script>
+    // Sincronización del selector de color con el input de texto
+    document.addEventListener('DOMContentLoaded', function() {
+        const cp = document.getElementById('colorPicker');
+        const ch = document.getElementById('colorHex');
+        if(cp && ch) {
+            cp.addEventListener('input', () => ch.value = cp.value.toUpperCase());
+            ch.addEventListener('input', () => { 
+                if(/^#[0-9A-F]{6}$/i.test(ch.value)) cp.value = ch.value; 
+            });
+        }
+    });
+</script>
+
+<?php include 'includes/layout_footer.php'; ?>
+
+<?php if(isset($_GET['msg'])): ?>
+<script>
+    window.addEventListener('load', function() {
+        const m = "<?php echo $_GET['msg']; ?>";
+        if(m === 'guardado') Swal.fire({ icon: 'success', title: '¡Excelente!', text: 'Los cambios se aplicaron correctamente en todo el sistema.', timer: 3000, showConfirmButton: false });
+        if(m === 'afip_ok') Swal.fire({ icon: 'success', title: 'AFIP', text: 'Datos de facturación electrónica actualizados.', timer: 3000, showConfirmButton: false });
+    });
+</script>
+<?php endif; ?>
