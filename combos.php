@@ -301,12 +301,21 @@ foreach($combos as $c) {
     let cropper, prefijoGlobal;
     let modalCrop, modalEditar;
 
-    // Esperamos a que el DOM y el footer carguen las librerías
+    // Inicialización segura de modales y eventos
     document.addEventListener('DOMContentLoaded', function() {
         if(typeof bootstrap !== 'undefined') {
             modalCrop = new bootstrap.Modal(document.getElementById('modalCrop'));
             modalEditar = new bootstrap.Modal(document.getElementById('modalEditar'));
         }
+
+        // Mover el click del recorte aquí adentro para asegurar que jQuery ($) ya cargó
+        $('#btnRecortar').on('click', function() {
+            if(!cropper) return;
+            let base64 = cropper.getCroppedCanvas({width:600, height:600}).toDataURL('image/png');
+            $(`#${prefijoGlobal}_preview`).attr('src', base64);
+            $(`#${prefijoGlobal}_base64`).val(base64);
+            modalCrop.hide();
+        });
     });
     
     // DATOS SEGUROS
@@ -392,13 +401,7 @@ foreach($combos as $c) {
     document.getElementById('modalCrop').addEventListener('shown.bs.modal', ()=>{
         cropper = new Cropper(document.getElementById('imageToCrop'), {aspectRatio:1, viewMode:1});
     });
-    $('#btnRecortar').click(()=>{
-        if(!cropper) return;
-        let base64 = cropper.getCroppedCanvas({width:600, height:600}).toDataURL('image/png');
-        $(`#${prefijoGlobal}_preview`).attr('src', base64);
-        $(`#${prefijoGlobal}_base64`).val(base64);
-        modalCrop.hide();
-    });
+    
 
     window.borrarPack = function(id) {
         Swal.fire({title:'¿Borrar?', icon:'warning', showCancelButton:true, confirmButtonText:'Sí', confirmButtonColor:'#d33'}).then((r)=>{

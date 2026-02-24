@@ -182,11 +182,18 @@ try {
                             <label class="fw-bold small mb-1">Forma de Pago</label>
                             <select id="metodo-pago" class="form-select form-select-lg">
                                 <option value="Efectivo">💵 Efectivo</option>
-                                <option value="MP">📱 MercadoPago</option>
+                                <option value="mercadopago">📱 MercadoPago</option>
                                 <option value="Debito">💳 Débito</option>
                                 <option value="Credito">💳 Crédito</option>
-                                <option value="Mixto">💸 PAGO MIXTO</option> <option value="CtaCorriente" class="fw-bold text-danger">🗒️ FIADO / CC</option>
+                                <option value="Mixto">💸 PAGO MIXTO</option>
+                                <option value="CtaCorriente" class="fw-bold text-danger">🗒️ FIADO / CC</option>
                             </select>
+                        </div>
+
+                        <div id="btn-sync-mp" class="d-none mb-3">
+                            <button type="button" class="btn btn-primary w-100 fw-bold" onclick="enviarMontoAMercadoPago()">
+                                <i class="bi bi-cloud-upload"></i> CARGAR PRECIO AL QR
+                            </button>
                         </div>
 
                         <div id="box-vuelto" class="mb-4">
@@ -699,8 +706,11 @@ if(parseFloat(p.precio_oferta) > 0) {
             }
         }
         
-        $('#metodo-pago').change(function(){ 
+                $('#metodo-pago').change(function(){ 
             let val = $(this).val();
+            $('#btn-sync-mp').addClass('d-none');
+            $('#btn-finalizar').removeClass('d-none'); // Mostrar por defecto
+
             if(val == 'Mixto') {
                 $('#box-vuelto').hide();
                 $('#box-mixto-info').removeClass('d-none');
@@ -708,15 +718,17 @@ if(parseFloat(p.precio_oferta) > 0) {
             } else if(val == 'Efectivo') {
                 $('#box-vuelto').slideDown();
                 $('#box-mixto-info').addClass('d-none');
-                pagosMixtosConfirmados = null; 
+            } else if(val == 'mercadopago') { // NOMBRE CORREGIDO
+                $('#box-vuelto').slideUp();
+                $('#btn-sync-mp').removeClass('d-none'); 
+                $('#btn-finalizar').addClass('d-none'); // <--- ACÁ ESCONDEMOS EL BOTÓN DE CONFIRMAR
+                $('#box-mixto-info').addClass('d-none');
             } else {
                 $('#box-vuelto').slideUp();
                 $('#box-mixto-info').addClass('d-none');
-                pagosMixtosConfirmados = null;
             }
             calc();
         });
-
         function abrirModalMixto() {
             if(carrito.length === 0) {
                 Swal.fire('Error', 'Carrito vacío', 'error');
@@ -816,79 +828,82 @@ if(parseFloat(p.precio_oferta) > 0) {
         // PROCESAR VENTA (FINALIZAR - CORREGIDO RUTA)
         // PROCESAR VENTA (FINALIZAR)
         // PROCESAR VENTA (FINALIZAR)
-        $('#btn-finalizar').click(function() {
-            if(carrito.length === 0) return Swal.fire('Error', 'El carrito está vacío.', 'error');
+        // PROCESAR VENTA (FINALIZAR)
+$('#btn-finalizar').click(function() {
+    if(carrito.length === 0) return Swal.fire('Error', 'El carrito está vacío.', 'error');
+    
+    let total = parseFloat($('#total-venta').attr('data-total-final'));
+    let metodo = $('#metodo-pago').val();
+    let idCliente = $('#id-cliente').val();
+    
+    let cupon = $('#input-cupon').val();
+    let descManual = $('#input-desc-manual').val();
+    let saldoUsado = ($('#usar-saldo').is(':checked')) ? $('#val-saldo').val() : 0;
+    let puntosUsados = $('#val-puntos-usados').val(); 
+    
+    let pagosMixtos = null;
+    if(metodo === 'Mixto') {
+        if(!pagosMixtosConfirmados) return Swal.fire('Atención', 'Debes confirmar el desglose del Pago Mixto.', 'warning');
+        pagosMixtos = JSON.stringify(pagosMixtosConfirmados);
+    }
+
+    let pagoDeuda = $('#pago-deuda-calculado').val();
+
+    let boton = $(this);
+    boton.prop('disabled', true).html('<span class="spinner-border spinner-border-sm"></span> Procesando...');
+
+    $.post('acciones/procesar_venta.php', {
+        items: carrito,
+        total: total,
+        metodo_pago: metodo,
+        id_cliente: idCliente,
+        cupon_codigo: cupon,
+        desc_manual_monto: descManual,
+        saldo_favor_usado: saldoUsado,
+        pago_deuda: pagoDeuda,
+        pagos_mixtos: pagosMixtos,
+        descuento_puntos_monto: puntosUsados 
+    }, function(res) {
+        boton.prop('disabled', false).html('<i class="bi bi-check-lg"></i> CONFIRMAR VENTA');
+        
+        if(res.status === 'success') {
+            let idVenta = res.id_venta;
+            let idClienteActual = $('#id-cliente').val(); 
             
-            let total = parseFloat($('#total-venta').attr('data-total-final'));
-            let metodo = $('#metodo-pago').val();
-            let idCliente = $('#id-cliente').val();
-            
-            let cupon = $('#input-cupon').val();
-            let descManual = $('#input-desc-manual').val();
-            let saldoUsado = ($('#usar-saldo').is(':checked')) ? $('#val-saldo').val() : 0;
-            let puntosUsados = $('#val-puntos-usados').val(); 
-            
-            let pagosMixtos = null;
-            if(metodo === 'Mixto') {
-                if(!pagosMixtosConfirmados) return Swal.fire('Atención', 'Debes confirmar el desglose del Pago Mixto.', 'warning');
-                pagosMixtos = JSON.stringify(pagosMixtosConfirmados);
+            // Botones de la Modal
+            let botonesHtml = `
+                <div class="d-grid gap-2">
+                    <button onclick="window.open('ticket.php?id=${idVenta}', 'pop-up', 'width=300,height=600')" class="btn btn-dark btn-lg py-3">
+                        <i class="bi bi-printer"></i> IMPRIMIR TICKET
+                    </button>`;
+
+            // Solo mostrar correo si NO es Consumidor Final (ID 1)
+            if(idClienteActual && idClienteActual != "1") { 
+                botonesHtml += `
+                    <button onclick="enviarTicketEmail(${idVenta})" class="btn btn-outline-primary py-2">
+                        <i class="bi bi-envelope"></i> Enviar por Correo
+                    </button>`;
             }
 
-            let pagoDeuda = $('#pago-deuda-calculado').val();
+            botonesHtml += `
+                    <hr>
+                    <button onclick="location.reload()" class="btn btn-success btn-lg py-3">
+                        <i class="bi bi-plus-circle"></i> NUEVA VENTA
+                    </button>
+                </div>`;
 
-            let boton = $(this);
-            boton.prop('disabled', true).html('<span class="spinner-border spinner-border-sm"></span> Procesando...');
-
-            // 1. LLAMADA AL PROCESAR (ESTÁ EN ACCIONES/)
-            $.post('acciones/procesar_venta.php', {
-                items: carrito,
-                total: total,
-                metodo: metodo,
-                id_cliente: idCliente,
-                cupon_codigo: cupon,
-                desc_manual_monto: descManual,
-                saldo_favor_usado: saldoUsado,
-                pago_deuda: pagoDeuda,
-                pagos_mixtos: pagosMixtos,
-                descuento_puntos_monto: puntosUsados 
-
-            }, function(res) {
-                boton.prop('disabled', false).html('<i class="bi bi-check-lg"></i> CONFIRMAR VENTA');
-                if(res.status === 'success') {
-    // Obtenemos datos del cliente para el envío
-    let nombreCli = $('#lbl-nombre-cliente').text();
-    let idVenta = res.id_venta;
-
-    Swal.fire({
-        icon: 'success',
-        title: '¡Venta Exitosa!',
-        text: 'Ticket #' + idVenta + ' - Cliente: ' + nombreCli,
-        showConfirmButton: false,
-        html: `
-            <div class="d-grid gap-2 mt-3">
-                <button onclick="window.open('ticket.php?id=${idVenta}', 'pop-up', 'width=300,height=600')" class="btn btn-dark py-2">
-                    <i class="bi bi-printer"></i> Imprimir Ticket
-                </button>
-                <button onclick="enviarTicketWhatsApp(${idVenta})" class="btn btn-success py-2">
-                    <i class="bi bi-whatsapp"></i> Enviar por WhatsApp
-                </button>
-                <button onclick="enviarTicketEmail(${idVenta})" class="btn btn-primary py-2">
-                    <i class="bi bi-envelope"></i> Enviar por Correo
-                </button>
-                <button onclick="location.reload()" class="btn btn-outline-secondary mt-2">
-                    Nueva Venta
-                </button>
-            </div>
-        `,
-        allowOutsideClick: false
-    });
-}
-
-            }, 'json').fail(function() {
-                boton.prop('disabled', false).html('<i class="bi bi-check-lg"></i> CONFIRMAR VENTA');
-                Swal.fire('Error', 'Fallo de conexión.', 'error');
+            Swal.fire({
+                icon: 'success',
+                title: '<span style="color:#198754">¡VENTA EXITOSA!</span>',
+                html: botonesHtml,
+                showConfirmButton: false,
+                allowOutsideClick: false
             });
-        });
+        } else {
+            Swal.fire('Error', res.msg, 'error');
+        }
+    }, 'json');
+});
         
                 // --- FUNCIONES DE SUSPENSIÓN (AGREGADAS AL FINAL) ---
 
@@ -1074,6 +1089,39 @@ function enviarTicketEmail(idVenta) {
     }, 'json');
 }
 
+// Variable global para el control del tiempo
+let intervaloMP = null;
+
+function enviarMontoAMercadoPago() {
+    let total = parseFloat($('#total-venta').attr('data-total-final')) || 0;
+    if(total <= 0) return Swal.fire('Error', 'El monto debe ser mayor a 0', 'error');
+
+    const btn = $('#btn-sync-mp button');
+    btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm"></span> Esperando...');
+
+    $.post('acciones/mp_sync.php', { total: total }, function(res) {
+        if(res.status === 'success') {
+            const ref = res.referencia;
+            Swal.fire({ icon: 'info', title: 'Esperando Pago', text: 'El cliente debe escanear el QR', showConfirmButton: false });
+
+            if(intervaloMP) clearInterval(intervaloMP);
+            intervaloMP = setInterval(function() {
+                $.getJSON('acciones/verificar_pago_mp.php', { referencia: ref }, function(statusRes) {
+                    if(statusRes.estado === 'pagado') {
+                        clearInterval(intervaloMP);
+                        Swal.close();
+
+                        // 1. Forzamos que el selector diga "mercadopago"
+                        $('#metodo-pago').val('mercadopago');
+                        
+                        // 2. Mostramos el botón un segundo y le damos clic solo
+                        $('#btn-finalizar').removeClass('d-none').click(); 
+                    }
+                });
+            }, 3000);
+        }
+    }, 'json');
+}
     </script>
 <div class="modal fade" id="modalClienteRapido" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">

@@ -175,7 +175,7 @@ $ahorro_final_cliente = $ahorro_total + $saldo_favor_usado + $ahorro_ofertas;
 
             <p class="negrita" style="font-size: 15px; margin-top: 5px;">TOTAL: $<?php echo number_format($venta['total'], 2, ',', '.'); ?></p>
             
-            <p style="font-size: 11px; margin-top:2px;">Metodo: <?php echo $venta['metodo_pago']; ?></p>
+            <p style="font-size: 11px; margin-top:2px;">Metodo: <?php echo strtoupper(str_replace('_', ' ', $venta['metodo_pago'])); ?></p>
 
             <?php if($ahorro_final_cliente > 0): ?>
                 <div class="ahorro-box negrita">

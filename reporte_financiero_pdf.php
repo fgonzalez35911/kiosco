@@ -61,18 +61,20 @@ foreach($lista_gastos as $g) {
     }
 }
 
-// D. DATOS EXTRA (Para los 6 gráficos nuevos)
 // 1. Días
-$sqlDias = "SELECT DAYNAME(fecha) as dia, SUM(total) as total FROM ventas WHERE fecha BETWEEN '$f_inicio' AND '$f_fin' AND estado='completada' GROUP BY DAYOFWEEK(fecha)";
+$sqlDias = "SELECT DAYNAME(fecha) as dia, SUM(total) as total FROM ventas WHERE fecha BETWEEN '$f_inicio 00:00:00' AND '$f_fin 23:59:59' AND estado='completada' GROUP BY DAYOFWEEK(fecha)";
 $data_dias = $conexion->query($sqlDias)->fetchAll(PDO::FETCH_KEY_PAIR);
+
 // 2. Horas
-$sqlHoras = "SELECT HOUR(fecha) as hora, COUNT(*) as c FROM ventas WHERE fecha BETWEEN '$f_inicio' AND '$f_fin' AND estado='completada' GROUP BY hora";
+$sqlHoras = "SELECT HOUR(fecha) as hora, COUNT(*) as c FROM ventas WHERE fecha BETWEEN '$f_inicio 00:00:00' AND '$f_fin 23:59:59' AND estado='completada' GROUP BY hora";
 $data_horas = $conexion->query($sqlHoras)->fetchAll(PDO::FETCH_KEY_PAIR);
-// 3. Clientes
-$sqlCli = "SELECT c.nombre, SUM(v.total) as t FROM ventas v JOIN clientes c ON v.id_cliente=c.id WHERE v.fecha BETWEEN '$f_inicio' AND '$f_fin' AND c.id > 1 GROUP BY c.id ORDER BY t DESC LIMIT 5";
+
+// 3. Clientes (CORREGIDO: Rango de horas y estado completada)
+$sqlCli = "SELECT c.nombre, SUM(v.total) as t FROM ventas v JOIN clientes c ON v.id_cliente=c.id WHERE v.fecha BETWEEN '$f_inicio 00:00:00' AND '$f_fin 23:59:59' AND c.id > 1 AND v.estado='completada' GROUP BY c.id ORDER BY t DESC LIMIT 5";
 $data_clientes = $conexion->query($sqlCli)->fetchAll(PDO::FETCH_KEY_PAIR);
+
 // 4. Vendedores
-$sqlVend = "SELECT u.usuario, SUM(v.total) as t FROM ventas v JOIN usuarios u ON v.id_usuario=u.id WHERE v.fecha BETWEEN '$f_inicio' AND '$f_fin' GROUP BY u.id ORDER BY t DESC";
+$sqlVend = "SELECT u.usuario, SUM(v.total) as t FROM ventas v JOIN usuarios u ON v.id_usuario=u.id WHERE v.fecha BETWEEN '$f_inicio 00:00:00' AND '$f_fin 23:59:59' AND v.estado='completada' GROUP BY u.id ORDER BY t DESC";
 $data_vend = $conexion->query($sqlVend)->fetchAll(PDO::FETCH_KEY_PAIR);
 
 // RESULTADOS
@@ -143,58 +145,87 @@ class PDF_Premium extends FPDF {
         $this->SetXY($x+5, $y+18); $this->SetFont('Arial', '', 7); $this->SetTextColor(100); $this->Cell($w-5, 4, utf8_decode($subtitle), 0, 1);
     }
     // Funciones para gráficos
-    function PieChart($x, $y, $w, $h, $data) {
-        $radius = min($w, $h)/2; $cx = $x + $w/2; $cy = $y + $h/2;
-        $total = array_sum($data);
-        if($total==0) return;
-        $angleStart = 0; $colors = [[41,128,185],[231,76,60],[243,156,18],[39,174,96],[142,68,173],[44,62,80]];
-        $i=0;
-        foreach($data as $lbl=>$val){
-            $angle = ($val/$total)*360;
-            if($angle!=0){
-                $col = $colors[$i%count($colors)]; $this->SetFillColor($col[0],$col[1],$col[2]);
-                $this->Sector($cx,$cy,$radius,$angleStart,$angleStart+$angle);
-                $this->Rect($x, $y+$h+($i*5), 3, 3, 'F');
-                $this->SetXY($x+4, $y+$h+($i*5)); $this->SetTextColor(0); $this->SetFont('Arial','',7);
-                $this->Cell(20, 3, utf8_decode(substr($lbl,0,10)." (".number_format(($val/$total)*100,0)."%)"));
+    // NUEVA TECNOLOGÍA: Gráficos renderizados por API (Chart.js)
+    function PieChart($x, $y, $w, $h, $data, $titulo) {
+        $this->SetXY($x, $y);
+        $this->SetFont('Arial', 'B', 10);
+        $this->SetTextColor(33);
+        $this->Cell($w, 8, utf8_decode($titulo), 0, 1, 'C');
+
+        if(array_sum($data) <= 0) return;
+
+        $labels = []; $values = [];
+        foreach($data as $lbl => $val) {
+            if($val <= 0) continue;
+            $labels[] = "'" . str_replace(["'", "\""], "", $lbl) . "'";
+            $values[] = $val;
+        }
+
+        $chart = "{
+            type: 'pie',
+            data: {
+                labels: [" . implode(",", $labels) . "],
+                datasets: [{
+                    data: [" . implode(",", $values) . "],
+                    backgroundColor: ['#3498db','#e74c3c','#f1c40f','#2ecc71','#9b59b6','#34495e'],
+                    borderWidth: 2,
+                    borderColor: '#ffffff'
+                }]
+            },
+            options: { 
+                plugins: { 
+                    legend: { position: 'right' },
+                    datalabels: { display: false } 
+                } 
             }
-            $angleStart += $angle; $i++;
-        }
+        }";
+
+        $url = "https://quickchart.io/chart?c=" . urlencode(preg_replace('/\r|\n/', '', $chart)) . "&w=400&h=200&format=png";
+        $this->Image($url, $x, $y + 10, $w, $h - 10, 'PNG');
     }
-    function Sector($xc, $yc, $r, $a, $b, $style='FD', $cw=true, $o=90) {
-        $d0 = $a - $o; $d1 = $b - $o;
-        if($cw){ $d2 = $d0; $d0 = $d1; $d1 = $d2; }
-        $pi = 3.14159265358979323846;
-        $a = $d0 * $pi / 180; $b = $d1 * $pi / 180;
-        if (abs($a - $b) > 4000) return;
-        $d = $b - $a; if ($d == 0 && $style == 'F') return;
-        $op = sprintf('%.2F %.2F m', ($xc + $r * cos($a)) * $this->k, ($this->h - ($yc - $r * sin($a))) * $this->k);
-        if ($style == 'F') $op .= sprintf(' %.2F %.2F l', $xc * $this->k, ($this->h - $yc) * $this->k);
-        $start_val = $a; $end_val = $b; $step_val = ($end_val - $start_val) / 4;
-        for ($i = 1; $i <= 4; $i++) {
-            $angle = $start_val + $i * $step_val;
-            $op .= sprintf(' %.2F %.2F l', ($xc + $r * cos($angle)) * $this->k, ($this->h - ($yc - $r * sin($angle))) * $this->k);
+    function BarChart($x, $y, $w, $h, $data, $titulo) {
+        $this->SetXY($x, $y);
+        $this->SetFont('Arial', 'B', 10);
+        $this->SetTextColor(33);
+        $this->Cell($w, 8, utf8_decode($titulo), 0, 1, 'C');
+
+        if(count($data) == 0) return;
+
+        $labels = []; $values = [];
+        foreach($data as $lbl => $val) {
+            $labels[] = "'" . substr(str_replace(["'", "\""], "", $lbl), 0, 12) . "'";
+            $values[] = $val;
         }
-        if ($style != 'D') $op .= ' f'; if ($style != 'F') $op .= ' s'; $this->_out($op);
-    }
-    function BarChart($x, $y, $w, $h, $data, $type='H') {
-        $max = (count($data)>0) ? max($data) : 1; $i=0;
-        $w_avail = $w - 20; $h_avail = $h - 10;
-        $this->SetFillColor(41,128,185);
-        foreach($data as $lbl=>$val){
-            if($type=='H') {
-                $barW = ($val/$max)*$w_avail;
-                $this->SetXY($x, $y+($i*6)); $this->SetFont('Arial','',7); $this->Cell(20,5,utf8_decode(substr($lbl,0,12)),0,0,'R');
-                $this->Rect($x+22, $y+($i*6), $barW, 4, 'F');
-                $this->SetXY($x+22+$barW+1, $y+($i*6)); $this->Cell(10,5,number_format($val,0));
-            } else {
-                $barW = ($w_avail/count($data))-2; $barH = ($val/$max)*$h_avail;
-                $this->Rect($x+20+($i*($barW+2)), $y+$h_avail-$barH, $barW, $barH, 'F');
-                $this->SetXY($x+20+($i*($barW+2)), $y+$h_avail+1); $this->SetFont('Arial','',6);
-                $this->Cell($barW,3,utf8_decode(substr($lbl,0,6)),0,0,'C');
+
+        $chart = "{
+            type: 'bar',
+            data: {
+                labels: [" . implode(",", $labels) . "],
+                datasets: [{
+                    label: 'Ventas',
+                    data: [" . implode(",", $values) . "],
+                    backgroundColor: '#3498db',
+                    borderRadius: 4
+                }]
+            },
+            options: {
+                layout: { padding: { top: 25 } },
+                plugins: {
+                    legend: { display: false },
+                    datalabels: { 
+                        color: '#000000', 
+                        align: 'end', 
+                        anchor: 'end', 
+                        font: { weight: 'bold' },
+                        formatter: function(value) { return '$' + value; }
+                    }
+                },
+                scales: { yAxes: [{ ticks: { beginAtZero: true } }] }
             }
-            $i++;
-        }
+        }";
+
+        $url = "https://quickchart.io/chart?c=" . urlencode(preg_replace('/\r|\n/', '', $chart)) . "&w=400&h=200&format=png";
+        $this->Image($url, $x, $y + 10, $w, $h - 10, 'PNG');
     }
 }
 
@@ -293,8 +324,20 @@ $pdf->SetFont('Arial', '', 9);
 
 foreach($lista_metodos as $m) {
     $porc = ($ingresos > 0) ? ($m['total']/$ingresos)*100 : 0;
-    $pdf->SetX(10); // Asegurar X=10 siempre
-    $pdf->Cell(45, 7, utf8_decode($m['metodo_pago']), 1);
+    
+    // Filtro para detectar vacíos
+    $nombre_metodo = trim($m['metodo_pago']);
+    if($nombre_metodo === '') {
+        $nombre_metodo = 'Sin Especificar';
+    }
+    
+    // Formatear Mercado Pago
+    if(strtolower($nombre_metodo) === 'mercadopago') {
+        $nombre_metodo = 'Mercado Pago';
+    }
+
+    $pdf->SetX(10); 
+    $pdf->Cell(45, 7, utf8_decode(ucfirst($nombre_metodo)), 1);
     $pdf->Cell(25, 7, "$ ".number_format($m['total'], 0, ',', '.'), 1, 0, 'R');
     $pdf->Cell(20, 7, number_format($porc, 1)."%", 1, 1, 'R');
 }
@@ -352,41 +395,37 @@ foreach($data_gastos_chart as $cat => $val) {
     $count++;
 }
 
-// --- PÁGINA 3: 6 GRÁFICOS NUEVOS (ORDENADOS) ---
+// --- PÁGINA 3: ESTADÍSTICAS VISUALES (LIMPIO Y ESPACIADO) ---
 $pdf->AddPage();
 $pdf->SetFont('Arial', 'B', 14); $pdf->SetTextColor(33);
 $pdf->Cell(0, 10, utf8_decode("3. ESTADÍSTICAS VISUALES"), 0, 1, 'C');
 $pdf->Line(10, $pdf->GetY(), 200, $pdf->GetY());
-$pdf->Ln(5);
+$pdf->Ln(15); // ESPACIO AGREGADO PARA QUE NO SE ENCINME CON LA LÍNEA
 
-$gridH = 60; $gridW = 90;
-$row1 = 35; $row2 = 110; $row3 = 185;
+// Grilla empujada hacia abajo
 $col1 = 10; $col2 = 110;
+$row1 = 60; $row2 = 135; $row3 = 210;
+$w_chart = 90; $h_chart = 55;
 
-// 1. Rentabilidad (Torta)
-$data_rent = ['Costos'=>$costos_mercaderia, 'Gastos'=>$gastos_operativos, 'Ganancia'=>$utilidad_neta];
-$pdf->SetXY($col1, $row1); $pdf->SetFont('Arial','B',10); $pdf->Cell($gridW, 8, 'Distribucion de Ingresos', 0, 1, 'C');
-$pdf->PieChart($col1, $row1+10, $gridW, $gridH, $data_rent);
+// 1. Rentabilidad 
+$data_rent = ['Costos'=>(float)$costos_mercaderia, 'Gastos'=>(float)$gastos_operativos, 'Ganancia'=>($utilidad_neta > 0 ? (float)$utilidad_neta : 0)];
+$pdf->PieChart($col1, $row1, $w_chart, $h_chart, $data_rent, 'Distribucion de Ingresos');
 
-// 2. Gastos (Torta)
-$pdf->SetXY($col2, $row1); $pdf->SetFont('Arial','B',10); $pdf->Cell($gridW, 8, 'Desglose de Gastos', 0, 1, 'C');
-$pdf->PieChart($col2, $row1+10, $gridW, $gridH, $data_gastos_chart);
+// 2. Gastos 
+$pdf->PieChart($col2, $row1, $w_chart, $h_chart, $data_gastos_chart, 'Desglose de Gastos');
 
-// 3. Dias Semana (Barras V)
-$pdf->SetXY($col1, $row2); $pdf->SetFont('Arial','B',10); $pdf->Cell($gridW, 8, 'Ventas por Dia', 0, 1, 'C');
-$pdf->BarChart($col1, $row2+10, $gridW, $gridH-10, $data_dias, 'V');
+// 3. Ventas por Día 
+$pdf->BarChart($col1, $row2, $w_chart, $h_chart, $data_dias, 'Ventas por Dia');
 
-// 4. Horas (Barras V)
-$pdf->SetXY($col2, $row2); $pdf->SetFont('Arial','B',10); $pdf->Cell($gridW, 8, 'Horas Pico', 0, 1, 'C');
-$pdf->BarChart($col2, $row2+10, $gridW, $gridH-10, $data_horas, 'V');
+// 4. Horas Pico 
+$pdf->BarChart($col2, $row2, $w_chart, $h_chart, $data_horas, 'Horas Pico');
 
-// 5. Clientes (Barras H)
-$pdf->SetXY($col1, $row3); $pdf->SetFont('Arial','B',10); $pdf->Cell($gridW, 8, 'Top Clientes', 0, 1, 'C');
-$pdf->BarChart($col1, $row3+10, $gridW, $gridH-10, $data_clientes, 'H');
+// 5. Top Clientes 
+$pdf->BarChart($col1, $row3, $w_chart, $h_chart, $data_clientes, 'Top Clientes (Ventas $)');
 
-// 6. Vendedores (Barras H)
-$pdf->SetXY($col2, $row3); $pdf->SetFont('Arial','B',10); $pdf->Cell($gridW, 8, 'Ranking Vendedores', 0, 1, 'C');
-$pdf->BarChart($col2, $row3+10, $gridW, $gridH-10, $data_vend, 'H');
+// 6. Ranking Vendedores
+$pdf->BarChart($col2, $row3, $w_chart, $h_chart, $data_vend, 'Ranking Vendedores');
 
-$pdf->Output('I', 'Reporte_Gerencial.pdf');
+// UNA SOLA SALIDA FINAL PARA EVITAR EL ERROR 500
+$pdf->Output('I', 'Reporte_Gerencial_El10.pdf');
 ?>

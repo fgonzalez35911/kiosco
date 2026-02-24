@@ -39,7 +39,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['guardar_general'])) {
             'stock_use_global' => isset($_POST['stock_use_global']) ? 1 : 0,
             'stock_global_valor' => intval($_POST['stock_global_valor'] ?? 5),
             'ticket_modo' => $_POST['ticket_modo'] ?? 'afip',
-            'redondeo_auto' => isset($_POST['redondeo_auto']) ? 1 : 0
+            'redondeo_auto' => isset($_POST['redondeo_auto']) ? 1 : 0,
+            'mp_access_token' => trim($_POST['mp_access_token'] ?? ''),
+            'mp_user_id' => trim($_POST['mp_user_id'] ?? ''),
+            'mp_pos_id' => trim($_POST['mp_pos_id'] ?? '')
         ];
 
         $logo_url = $_POST['logo_actual']; 
@@ -57,7 +60,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['guardar_general'])) {
             'color_barra_nav' => 'Color', 'modulo_clientes' => 'Mod. Clientes', 'modulo_stock' => 'Mod. Stock',
             'modulo_reportes' => 'Mod. Reportes', 'modulo_fidelizacion' => 'Mod. Puntos',
             'stock_use_global' => 'Uso Stock Global', 'stock_global_valor' => 'Valor Stock Global',
-            'ticket_modo' => 'Modo Ticket', 'redondeo_auto' => 'Redondeo Auto'
+            'ticket_modo' => 'Modo Ticket', 'redondeo_auto' => 'Redondeo Auto',
+            'mp_access_token' => 'MP Token', 'mp_user_id' => 'MP UserID', 'mp_pos_id' => 'MP POS'
         ];
 
         foreach ($map as $campo => $label) {
@@ -75,16 +79,21 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['guardar_general'])) {
                 modulo_clientes=?, modulo_stock=?, modulo_reportes=?, modulo_fidelizacion=?, logo_url=?,
                 dias_alerta_vencimiento=?, dinero_por_punto=?,
                 stock_use_global=?, stock_global_valor=?, ticket_modo=?, redondeo_auto=?,
-                color_barra_nav=? WHERE id=1";
+                color_barra_nav=?, mp_access_token=?, mp_user_id=?, mp_pos_id=? WHERE id=1";
 
         $conexion->prepare($sql)->execute([
             $n['nombre_negocio'], $n['direccion_local'], $n['telefono_whatsapp'], $n['whatsapp_pedidos'], $n['cuit'], $n['mensaje_ticket'],
             $n['modulo_clientes'], $n['modulo_stock'], $n['modulo_reportes'], $n['modulo_fidelizacion'], $logo_url,
             $n['dias_alerta_vencimiento'], $n['dinero_por_punto'],
             $n['stock_use_global'], $n['stock_global_valor'], $n['ticket_modo'], $n['redondeo_auto'],
-            $n['color_barra_nav']
+            $n['color_barra_nav'], $n['mp_access_token'], $n['mp_user_id'], $n['mp_pos_id']
         ]);
 
+        // AUTO-REPARAR CAJA MP (ESTO VINCULA EL ID TÉCNICO AL GUARDAR)
+        if (!empty($n['mp_access_token']) && !empty($n['mp_pos_id'])) {
+            autoRepararCajaMP($n['mp_access_token'], $n['mp_pos_id']);
+        }
+        
         // 5. REGISTRAR EN CAJA NEGRA
         if (!empty($cambios)) {
             $detalles_audit = implode(" | ", $cambios);
@@ -151,7 +160,7 @@ $afip = $conexion->query("SELECT * FROM afip_config WHERE id=1")->fetch(PDO::FET
 // Leemos la columna real de tu base de datos (color_barra_nav)
 $color_sistema = $conf['color_barra_nav'] ?? '#102A57';
 
-include 'includes/layout_header.php'; ?>
+include 'includes/layout_header.php'; ?></div>
 
 <div class="header-blue" style="background-color: <?php echo $color_sistema; ?> !important; padding: 40px 0; border-radius: 0;">
     <i class="bi bi-gear bg-icon-large"></i>
@@ -311,6 +320,20 @@ include 'includes/layout_header.php'; ?>
                                         <label class="small ms-2">Redondeo automático en ventas</label>
                                     </div>
                                 </div>
+                                <div class="col-12"><hr><h6 class="fw-bold"><i class="bi bi-qr-code"></i> Configuración Mercado Pago (QR Dinámico)</h6></div>
+                                <div class="col-md-6">
+                                    <label class="small fw-bold">Access Token (Producción)</label>
+                                    <input type="text" name="mp_access_token" class="form-control form-control-sm" value="<?php echo $conf['mp_access_token']; ?>" placeholder="APP_USR-...">
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="small fw-bold">User ID (Collector ID)</label>
+                                    <input type="text" name="mp_user_id" class="form-control form-control-sm" value="<?php echo $conf['mp_user_id']; ?>">
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="small fw-bold">ID Punto de Venta (External ID)</label>
+                                    <input type="text" name="mp_pos_id" class="form-control form-control-sm" value="<?php echo $conf['mp_pos_id']; ?>">
+                                </div>
+
                                 <div class="col-12 mt-4">
                                     <button type="submit" name="guardar_general" class="btn btn-primary">GUARDAR CONFIGURACIÓN</button>
                                 </div>
@@ -397,4 +420,25 @@ include 'includes/layout_header.php'; ?>
         if(m === 'afip_ok') Swal.fire({ icon: 'success', title: 'AFIP', text: 'Datos de facturación electrónica actualizados.', timer: 3000, showConfirmButton: false });
     });
 </script>
-<?php endif; ?>
+<?php endif; 
+
+// FUNCIÓN PARA VINCULAR LA CAJA TÉCNICAMENTE (EXTERNAL_ID)
+function autoRepararCajaMP($token, $externalIdDeseado) {
+    $ch = curl_init("https://api.mercadopago.com/pos");
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ["Authorization: Bearer $token"]);
+    $res = json_decode(curl_exec($ch), true);
+
+    if (isset($res['results'][0]['id'])) {
+        $internal_id = $res['results'][0]['id'];
+        $ch2 = curl_init("https://api.mercadopago.com/pos/$internal_id");
+        curl_setopt($ch2, CURLOPT_CUSTOMREQUEST, "PUT");
+        curl_setopt($ch2, CURLOPT_POSTFIELDS, json_encode(["external_id" => $externalIdDeseado]));
+        curl_setopt($ch2, CURLOPT_HTTPHEADER, ["Authorization: Bearer $token", "Content-Type: application/json"]);
+        curl_exec($ch2);
+        return true;
+    }
+    return false;
+}
+
+?>
