@@ -1,9 +1,16 @@
 <?php
-// combos.php - ARCHIVO COMPLETO FINAL
+// combos.php - ARCHIVO COMPLETO FINAL (CON CANDADOS)
 session_start();
 require_once 'includes/db.php';
 
 if (!isset($_SESSION['usuario_id'])) { header("Location: index.php"); exit; }
+
+// --- CANDADOS DE SEGURIDAD ---
+$permisos = $_SESSION['permisos'] ?? [];
+$es_admin = (($_SESSION['rol'] ?? 3) <= 2);
+
+// Candado de Página
+if (!$es_admin && !in_array('ver_combos', $permisos)) { header("Location: dashboard.php"); exit; }
 
 // --- 1. PROCESAR IMAGEN (CROPPER) ---
 function procesarImagenBase64($base64, $url_texto, $actual) {
@@ -22,6 +29,7 @@ function procesarImagenBase64($base64, $url_texto, $actual) {
 
 // CREAR
 if (isset($_POST['crear_combo'])) {
+    if (!$es_admin && !in_array('crear_combo', $permisos)) die("Sin permiso para crear.");
     try {
         $conexion->beginTransaction();
         $img = procesarImagenBase64($_POST['imagen_base64'], '', 'default.jpg');
@@ -58,55 +66,127 @@ if (isset($_POST['crear_combo'])) {
             }
         }
         $conexion->commit();
+        $detalles_audit = "Combo Creado: " . $_POST['nombre'] . " | Precio: $" . $_POST['precio'];
+        $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'COMBO_NUEVO', ?, NOW())")->execute([$_SESSION['usuario_id'], $detalles_audit]);
         header("Location: combos.php?msg=creado"); exit;
     } catch (Exception $e) { $conexion->rollBack(); die($e->getMessage()); }
 }
 
 // EDITAR
 if (isset($_POST['editar_combo'])) {
+    if (!$es_admin && !in_array('editar_combo', $permisos)) die("Sin permiso para editar.");
     try {
         $conexion->beginTransaction();
         $id = $_POST['id_combo'];
         $img = procesarImagenBase64($_POST['imagen_base64'], '', $_POST['imagen_actual']);
         
-        // Obtener código viejo
-        $stmtCod = $conexion->prepare("SELECT codigo_barras FROM combos WHERE id = ?");
-        $stmtCod->execute([$id]);
-        $cod = $stmtCod->fetchColumn();
+        // 1. Obtener datos viejos absolutos (Combo + Producto Espejo)
+        $stmtOld = $conexion->prepare("SELECT c.*, p.precio_oferta, p.id_categoria, p.es_destacado_web FROM combos c LEFT JOIN productos p ON c.codigo_barras = p.codigo_barras WHERE c.id = ?");
+        $stmtOld->execute([$id]);
+        $old = $stmtOld->fetch(PDO::FETCH_ASSOC);
+        $cod_viejo = $old['codigo_barras'];
 
-        // Update Combo
-        $conexion->prepare("UPDATE combos SET nombre=?, precio=?, fecha_inicio=?, fecha_fin=?, es_ilimitado=? WHERE id=?")
-            ->execute([
-                $_POST['nombre'], 
-                $_POST['precio'], 
-                $_POST['fecha_inicio'], 
-                $_POST['fecha_fin'], 
-                isset($_POST['es_ilimitado']) ? 1 : 0, 
-                $id
-            ]);
+        // Obtener items viejos para comparar
+        $stmtOldItems = $conexion->prepare("SELECT ci.id_producto, ci.cantidad, p.descripcion FROM combo_items ci JOIN productos p ON ci.id_producto = p.id WHERE ci.id_combo = ?");
+        $stmtOldItems->execute([$id]);
+        $oldItemsArr = $stmtOldItems->fetchAll(PDO::FETCH_ASSOC);
+        $oldItemsStr = implode(", ", array_map(function($i) { return $i['cantidad']."x ".$i['descripcion']; }, $oldItemsArr));
+        if(!$oldItemsStr) $oldItemsStr = "Vacío";
 
-        // Update Producto
-        $conexion->prepare("UPDATE productos SET descripcion=?, precio_venta=?, precio_oferta=?, id_categoria=?, es_destacado_web=?, imagen_url=? WHERE codigo_barras=?")
-            ->execute([
-                $_POST['nombre'], 
-                $_POST['precio'], 
-                !empty($_POST['precio_oferta']) ? $_POST['precio_oferta'] : NULL,
-                $_POST['id_categoria'],
-                isset($_POST['es_destacado']) ? 1 : 0,
-                $img,
-                $cod
-            ]);
+        // 2. Variables Nuevas
+        $n_nombre = $_POST['nombre'];
+        $n_precio = $_POST['precio'];
+        $n_oferta = !empty($_POST['precio_oferta']) ? $_POST['precio_oferta'] : 0;
+        $n_cat = $_POST['id_categoria'];
+        $n_cod = !empty($_POST['codigo']) ? $_POST['codigo'] : $cod_viejo;
+        $n_ilim = isset($_POST['es_ilimitado']) ? 1 : 0;
+        $n_fini = $_POST['fecha_inicio'];
+        $n_ffin = $_POST['fecha_fin'];
+        $n_dest = isset($_POST['es_destacado']) ? 1 : 0;
 
-        // Update Items
+        // 3. Detección Exhaustiva de Cambios
+        $cambios = [];
+        if($old['nombre'] != $n_nombre) $cambios[] = "Nombre: " . $old['nombre'] . " -> " . $n_nombre;
+        if(floatval($old['precio']) != floatval($n_precio)) $cambios[] = "Precio: $" . floatval($old['precio']) . " -> $" . floatval($n_precio);
+        if(floatval($old['precio_oferta']) != floatval($n_oferta)) $cambios[] = "Oferta: $" . floatval($old['precio_oferta']) . " -> $" . floatval($n_oferta);
+        if($old['codigo_barras'] != $n_cod) $cambios[] = "Código: " . $old['codigo_barras'] . " -> " . $n_cod;
+        if($old['id_categoria'] != $n_cat) {
+            $catOld = $conexion->query("SELECT nombre FROM categorias WHERE id=".intval($old['id_categoria']))->fetchColumn() ?: 'N/A';
+            $catNew = $conexion->query("SELECT nombre FROM categorias WHERE id=".intval($n_cat))->fetchColumn() ?: 'N/A';
+            $cambios[] = "Cat: " . $catOld . " -> " . $catNew;
+        }
+        if($old['es_ilimitado'] != $n_ilim) $cambios[] = "Ilimitado: " . ($old['es_ilimitado']?"Sí":"No") . " -> " . ($n_ilim?"Sí":"No");
+        if($old['fecha_inicio'] != $n_fini) $cambios[] = "F. Inicio: " . $old['fecha_inicio'] . " -> " . $n_fini;
+        if($old['fecha_fin'] != $n_ffin) $cambios[] = "F. Fin: " . $old['fecha_fin'] . " -> " . $n_ffin;
+        if($old['es_destacado_web'] != $n_dest) $cambios[] = "Destacado: " . ($old['es_destacado_web']?"Sí":"No") . " -> " . ($n_dest?"Sí":"No");
+        if($_POST['imagen_base64'] != '') $cambios[] = "Imagen Actualizada";
+
+        // 4. Update Combo
+        $conexion->prepare("UPDATE combos SET nombre=?, precio=?, codigo_barras=?, fecha_inicio=?, fecha_fin=?, es_ilimitado=? WHERE id=?")
+            ->execute([$n_nombre, $n_precio, $n_cod, $n_fini, $n_ffin, $n_ilim, $id]);
+
+        // 5. Update Producto Espejo
+        $conexion->prepare("UPDATE productos SET descripcion=?, precio_venta=?, precio_oferta=?, id_categoria=?, es_destacado_web=?, imagen_url=?, codigo_barras=? WHERE codigo_barras=?")
+            ->execute([$n_nombre, $n_precio, $n_oferta>0?$n_oferta:NULL, $n_cat, $n_dest, $img, $n_cod, $cod_viejo]);
+
+        // 6. Update Items y detectar cambios en el contenido
         $conexion->prepare("DELETE FROM combo_items WHERE id_combo = ?")->execute([$id]);
+        $newItemsArr = [];
         if (isset($_POST['prod_ids'])) {
             $stmtAdd = $conexion->prepare("INSERT INTO combo_items (id_combo, id_producto, cantidad) VALUES (?, ?, ?)");
             foreach ($_POST['prod_ids'] as $idx => $p_id) {
-                if(!empty($p_id)) $stmtAdd->execute([$id, $p_id, $_POST['prod_cants'][$idx]]);
+                if(!empty($p_id)) {
+                    $stmtAdd->execute([$id, $p_id, $_POST['prod_cants'][$idx]]);
+                    $n_desc = $conexion->query("SELECT descripcion FROM productos WHERE id=".intval($p_id))->fetchColumn();
+                    $newItemsArr[] = $_POST['prod_cants'][$idx] . "x " . $n_desc;
+                }
             }
         }
+        $newItemsStr = implode(", ", $newItemsArr);
+        if(!$newItemsStr) $newItemsStr = "Vacío";
+
+        if($oldItemsStr != $newItemsStr) {
+            $cambios[] = "Contenido: [" . $oldItemsStr . "] -> [" . $newItemsStr . "]";
+        }
+
         $conexion->commit();
+
+        // 7. REGISTRO EN AUDITORÍA INTELIGENTE
+        if(!empty($cambios)) {
+            $detalles_audit = "Combo Editado: " . $old['nombre'] . " | " . implode(" | ", $cambios);
+            $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'COMBO_EDITADO', ?, NOW())")->execute([$_SESSION['usuario_id'], $detalles_audit]);
+        }
+        
         header("Location: combos.php?msg=editado"); exit;
+    } catch (Exception $e) { $conexion->rollBack(); die($e->getMessage()); }
+}
+
+// ELIMINAR
+if (isset($_GET['eliminar_id'])) {
+    if (!$es_admin && !in_array('eliminar_combo', $permisos)) die("Sin permiso para eliminar.");
+    try {
+        $conexion->beginTransaction();
+        $id = $_GET['eliminar_id'];
+        
+        // Rescatar datos antes de que se borren para siempre
+        $stmtC = $conexion->prepare("SELECT nombre, precio, codigo_barras FROM combos WHERE id = ?");
+        $stmtC->execute([$id]);
+        $old = $stmtC->fetch(PDO::FETCH_ASSOC);
+        $cod = $old ? $old['codigo_barras'] : null;
+
+        $conexion->prepare("DELETE FROM combo_items WHERE id_combo = ?")->execute([$id]);
+        $conexion->prepare("DELETE FROM combos WHERE id = ?")->execute([$id]);
+        if($cod) $conexion->prepare("DELETE FROM productos WHERE codigo_barras = ?")->execute([$cod]);
+        
+        $conexion->commit();
+        
+        // Crear el registro de qué se eliminó
+        if($old) {
+            $detalles_audit = "Combo Eliminado: " . $old['nombre'] . " | Precio: $" . floatval($old['precio']) . " | Código: " . $old['codigo_barras'];
+            $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'COMBO_ELIMINADO', ?, NOW())")->execute([$_SESSION['usuario_id'], $detalles_audit]);
+        }
+        
+        header("Location: combos.php?msg=eliminado"); exit;
     } catch (Exception $e) { $conexion->rollBack(); die($e->getMessage()); }
 }
 
@@ -124,6 +204,8 @@ if (isset($_GET['eliminar_id'])) {
         if($cod) $conexion->prepare("DELETE FROM productos WHERE codigo_barras = ?")->execute([$cod]);
         
         $conexion->commit();
+        $detalles_audit = "Combo Eliminado (ID: " . $id . ")";
+        $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'COMBO_ELIMINADO', ?, NOW())")->execute([$_SESSION['usuario_id'], $detalles_audit]);
         header("Location: combos.php?msg=eliminado"); exit;
     } catch (Exception $e) { $conexion->rollBack(); die($e->getMessage()); }
 }
@@ -152,7 +234,19 @@ foreach($combos as $c) {
     if($c['precio_oferta'] > 0) $ofertas++;
     if($c['es_destacado_web']) $destacados++;
 }
+
+$color_sistema = '#102A57';
+try {
+    $resColor = $conexion->query("SELECT color_barra_nav FROM configuracion WHERE id=1");
+    if ($resColor) {
+        $dataC = $resColor->fetch(PDO::FETCH_ASSOC);
+        if (isset($dataC['color_barra_nav'])) $color_sistema = $dataC['color_barra_nav'];
+    }
+} catch (Exception $e) { }
+
 ?>
+
+
 
 <?php include 'includes/layout_header.php'; ?>
 
@@ -160,6 +254,7 @@ foreach($combos as $c) {
 <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
 
 <div class="header-blue" style="background: <?php echo $color_sistema; ?> !important; border-radius: 0 !important; width: 100vw; margin-left: calc(-50vw + 50%); padding: 40px 0; position: relative; overflow: hidden;">
+
     <i class="bi bi-basket2-fill bg-icon-large"></i>
     <div class="container position-relative">
         <div class="d-flex flex-column flex-md-row justify-content-between align-items-center mb-4 gap-3">
@@ -168,9 +263,11 @@ foreach($combos as $c) {
                 <p class="opacity-75 mb-0 text-white small">Gestión de ofertas y promociones</p>
             </div>
             <div>
+                <?php if($es_admin || in_array('crear_combo', $permisos)): ?>
                 <button class="btn btn-light text-dark fw-bold rounded-pill px-4 shadow-sm" data-bs-toggle="modal" data-bs-target="#modalCrear">
                     <i class="bi bi-plus-lg me-2"></i> Nuevo Combo
                 </button>
+                <?php endif; ?>
             </div>
         </div>
         <div class="row g-3">
@@ -213,8 +310,13 @@ foreach($combos as $c) {
                     </div>
                 </div>
                 <div class="p-3 bg-white d-flex justify-content-end gap-2 border-top">
+                    <?php if($es_admin || in_array('editar_combo', $permisos)): ?>
                     <button class="btn-action bg-warning-subtle text-warning-emphasis" onclick="abrirEditar(<?php echo $c['id']; ?>)"><i class="bi bi-pencil-fill"></i></button>
+                    <?php endif; ?>
+                    
+                    <?php if($es_admin || in_array('eliminar_combo', $permisos)): ?>
                     <button class="btn-action bg-danger-subtle text-danger" onclick="borrarPack(<?php echo $c['id']; ?>)"><i class="bi bi-trash-fill"></i></button>
+                    <?php endif; ?>
                 </div>
             </div>
         </div>
@@ -353,7 +455,7 @@ foreach($combos as $c) {
                 venta += (parseFloat(sel.data('venta'))||0)*cant;
             }
         });
-        $((tipo=='nuevo')?'#c_costo_total':'#e_costo_total').html(`<small>Costo: $${costo} | Sug: $${(venta*0.85).toFixed(0)}</small>`);
+        $((tipo=='nuevo')?'#c_costo_total':'#e_costo_total').html(`<small>Costo: $${costo} | Sugerido : $${(venta*0.85).toFixed(0)}</small>`);
         let inp = $(tipo=='nuevo'?'#c_precio_input':'#e_precio');
         if(tipo=='nuevo' && (inp.val()=='' || inp.val()==0)) inp.val((venta*0.85).toFixed(0));
     }

@@ -1,48 +1,62 @@
 <?php
-// productos.php - VERSIÓN PREMIUM UNIFICADA
+// productos.php - VERSIÓN PREMIUM UNIFICADA CON CANDADOS DE GRADO MILITAR
 session_start();
 
 // 1. CONEXIÓN PREVIA PARA PROCESAMIENTO (Evita pantalla en blanco al redireccionar)
 $rutas_db = [__DIR__ . '/db.php', __DIR__ . '/includes/db.php', 'db.php', 'includes/db.php'];
 foreach ($rutas_db as $ruta) { if (file_exists($ruta)) { require_once $ruta; break; } }
 
+if (!isset($_SESSION['usuario_id'])) { header("Location: index.php"); exit; }
+
+// --- CANDADOS DE SEGURIDAD ---
+$permisos = $_SESSION['permisos'] ?? [];
+$es_admin = ($_SESSION['rol'] <= 2);
+
+// Candado: Acceso a la página
+if (!$es_admin && !in_array('ver_productos', $permisos)) { 
+    header("Location: dashboard.php"); exit; 
+}
+
 // 2. PROCESAR ACCIONES ANTES DE CUALQUIER SALIDA HTML
 if(isset($_GET['toggle_id'])) {
+    if (!$es_admin && !in_array('toggle_producto', $permisos)) die("Acceso denegado: No tienes permiso para activar/desactivar.");
+    
     $id_tog = intval($_GET['toggle_id']);
     $st_act = intval($_GET['estado']);
     $nuevo = $st_act == 1 ? 0 : 1;
 
-    // AUDITORÍA: Obtenemos datos del producto (Respetando FETCH_OBJ)
     $stmtP = $conexion->prepare("SELECT descripcion FROM productos WHERE id = ?");
     $stmtP->execute([$id_tog]);
     $p_obj = $stmtP->fetch();
-    $nombre_p = $p_obj ? $p_obj->descripcion : 'Desconocido';
+    $nombre_p = $p_obj ? (is_object($p_obj) ? $p_obj->descripcion : $p_obj['descripcion']) : 'Desconocido';
 
     $conexion->prepare("UPDATE productos SET activo = ? WHERE id = ?")->execute([$nuevo, $id_tog]);
 
-    // REGISTRO EN CAJA NEGRA
     $estado_txt = ($nuevo == 1) ? 'ACTIVADO' : 'DESACTIVADO';
     $detalles = "Producto/Combo: $nombre_p -> Cambio de Estado a: $estado_txt";
     $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'PRODUCTO_ESTADO', ?, NOW())")
              ->execute([$_SESSION['usuario_id'], $detalles]);
 
-    header("Location: productos.php"); 
-    exit;
+    header("Location: productos.php"); exit;
 }
 
 if (isset($_GET['borrar'])) {
+    if (!$es_admin && !in_array('eliminar_producto', $permisos)) die("Acceso denegado: No tienes permiso para eliminar.");
     if (!isset($_GET['token']) || $_GET['token'] !== $_SESSION['csrf_token']) die("Error de seguridad.");
+    
     $id_borrar = intval($_GET['borrar']);
-
-    // AUDITORÍA: Datos antes de la eliminación
     $stmtP = $conexion->prepare("SELECT descripcion, codigo_barras, tipo FROM productos WHERE id = ?");
     $stmtP->execute([$id_borrar]);
     $p_obj = $stmtP->fetch();
 
     if ($p_obj) {
-        if ($p_obj->tipo === 'combo') { 
+        $tipo_prod = is_object($p_obj) ? $p_obj->tipo : $p_obj['tipo'];
+        $cod_barras = is_object($p_obj) ? $p_obj->codigo_barras : $p_obj['codigo_barras'];
+        $desc = is_object($p_obj) ? $p_obj->descripcion : $p_obj['descripcion'];
+
+        if ($tipo_prod === 'combo') { 
             $stmtC = $conexion->prepare("SELECT id FROM combos WHERE codigo_barras = ?");
-            $stmtC->execute([$p_obj->codigo_barras]);
+            $stmtC->execute([$cod_barras]);
             $id_c = $stmtC->fetchColumn();
             if($id_c) {
                 $conexion->prepare("DELETE FROM combo_items WHERE id_combo = ?")->execute([$id_c]);
@@ -51,14 +65,11 @@ if (isset($_GET['borrar'])) {
         }
         $conexion->prepare("DELETE FROM productos WHERE id = ?")->execute([$id_borrar]);
 
-        // REGISTRO EN CAJA NEGRA
-        $detalles_b = "Producto/Combo Eliminado: " . $p_obj->descripcion . " (Cód: " . $p_obj->codigo_barras . ")";
+        $detalles_b = "Producto/Combo Eliminado: " . $desc . " (Cód: " . $cod_barras . ")";
         $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'PRODUCTO_ELIMINADO', ?, NOW())")
                  ->execute([$_SESSION['usuario_id'], $detalles_b]);
     }
-
-    header("Location: productos.php?msg=borrado"); 
-    exit;
+    header("Location: productos.php?msg=borrado"); exit;
 }
 
 // 3. CARGA DE CABECERA Y CONFIGURACIÓN DE VISTA
@@ -71,16 +82,16 @@ $stock_critico_global = intval($conf_global['stock_global_valor'] ?? 5);
 
 $categorias = $conexion->query("SELECT * FROM categorias WHERE activo=1")->fetchAll();
 $proveedores_list = $conexion->query("SELECT id, empresa FROM proveedores ORDER BY empresa ASC")->fetchAll();
-$sql = "SELECT p.*, c.nombre as cat, cb.fecha_inicio, cb.fecha_fin, cb.es_ilimitado FROM productos p LEFT JOIN categorias c ON p.id_categoria=c.id LEFT JOIN combos cb ON p.codigo_barras = cb.codigo_barras ORDER BY p.id DESC";
+$sql = "SELECT p.*, c.nombre as cat, cb.fecha_inicio, cb.fecha_fin, cb.es_ilimitado FROM productos p LEFT JOIN categorias c ON p.id_categoria=c.id LEFT JOIN combos cb ON (p.codigo_barras = cb.codigo_barras AND p.codigo_barras != '' AND p.codigo_barras IS NOT NULL) GROUP BY p.id ORDER BY p.id DESC";
 $productos = $conexion->query($sql)->fetchAll();
 
 // OBTENER COLOR SEGURO (ESTÁNDAR PREMIUM)
 $color_sistema = '#102A57';
 try {
-    $resColor = $conexion->query("SELECT color_principal FROM configuracion WHERE id=1");
+    $resColor = $conexion->query("SELECT color_barra_nav FROM configuracion WHERE id=1");
     if ($resColor) {
         $dataC = $resColor->fetch(PDO::FETCH_ASSOC);
-        if (isset($dataC['color_principal'])) $color_sistema = $dataC['color_principal'];
+        if (isset($dataC['color_barra_nav'])) $color_sistema = $dataC['color_barra_nav'];
     }
 } catch (Exception $e) { }
 
@@ -105,7 +116,8 @@ foreach($productos as $p) {
 
 
 
-<div class="header-blue">
+<div class="header-blue" style="background: <?php echo $color_sistema; ?> !important; border-radius: 0 !important; width: 100vw; margin-left: calc(-50vw + 50%); padding: 40px 0; position: relative; overflow: hidden;">
+
     <i class="bi bi-grid-3x3-gap-fill bg-icon-large"></i>
     <div class="container position-relative">
         <div class="d-flex flex-column flex-md-row justify-content-between align-items-center mb-4 gap-3">
@@ -114,12 +126,17 @@ foreach($productos as $p) {
                 <p class="opacity-75 mb-0 text-white small">Administración de stock y precios del sistema</p>
             </div>
             <div class="d-flex gap-2">
+                <?php if($es_admin || in_array('ver_combos', $permisos)): ?>
                 <a href="combos.php" class="btn btn-warning fw-bold rounded-pill px-4 shadow-sm">
                     <i class="bi bi-box-seam-fill me-2"></i> Combos
                 </a>
+                <?php endif; ?>
+
+                <?php if($es_admin || in_array('crear_producto', $permisos)): ?>
                 <a href="producto_formulario.php" class="btn btn-light text-primary fw-bold rounded-pill px-4 shadow-sm">
                     <i class="bi bi-plus-lg me-2"></i> Nuevo Producto
                 </a>
+                <?php endif; ?>
             </div>
         </div>
 
@@ -312,19 +329,31 @@ foreach($productos as $p) {
                         </div>
 
                         <div class="card-footer-actions">
+                            <?php if($es_admin || in_array('toggle_producto', $permisos)): ?>
                             <div class="form-check form-switch m-0" title="Activar / Desactivar">
                                 <input class="form-check-input" type="checkbox" 
                                     onchange="window.location.href='productos.php?toggle_id=<?php echo $p->id; ?>&estado=<?php echo $p->activo; ?>'" 
                                     <?php echo $p->activo ? 'checked' : ''; ?>>
                             </div>
+                            <?php endif; ?>
                             
                             <div class="d-flex gap-2 ms-auto">
+                                <?php if($es_admin || in_array('reponer_stock', $permisos)): ?>
                                 <button type="button" class="btn-action btn-wallet" title="Reponer Stock" onclick="reponerStock(<?php echo $p->id; ?>, '<?php echo addslashes($p->descripcion); ?>', <?php echo $stock; ?>)">
                                     <i class="bi bi-plus-circle-fill"></i>
                                 </button>
+                                <?php endif; ?>
+
+                                <?php if($es_admin || in_array('editar_producto', $permisos)): ?>
                                 <a href="producto_formulario.php?id=<?php echo $p->id; ?>" class="btn-action btn-edit" title="Editar">
                                     <i class="bi bi-pencil-fill"></i>
                                 </a>
+                                <?php endif; ?>
+                                <?php if($es_admin || in_array('eliminar_producto', $permisos)): ?>
+                                <a href="productos.php?borrar=<?php echo $p->id; ?>&token=<?php echo isset($_SESSION['csrf_token']) ? $_SESSION['csrf_token'] : ''; ?>" class="btn-action" style="background-color: #dc3545; color: white; display: flex; align-items: center; justify-content: center; text-decoration: none;" title="Eliminar" onclick="return confirm('¿Estás seguro de que deseas eliminar este producto definitivamente?');">
+                                    <i class="bi bi-trash-fill"></i>
+                                </a>
+                                <?php endif; ?>
                             </div>
                         </div>
                     </div>

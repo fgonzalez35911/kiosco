@@ -1,8 +1,13 @@
 <?php
-// ventas.php - CONTROL DE APERTURA (FINAL CORREGIDO RUTAS)
+// ventas.php - CONTROL DE APERTURA CON SESIÓN SEGURA
 session_start();
 if (!isset($_SESSION['usuario_id'])) { header("Location: index.php"); exit; }
 require_once 'includes/db.php';
+
+// --- CARGA DE PERMISOS ---
+$permisos = $_SESSION['permisos'] ?? [];
+$es_admin = (($_SESSION['rol'] ?? 3) <= 2);
+
 require_once 'check_security.php';
 
 $usuario_id = $_SESSION['usuario_id'];
@@ -15,6 +20,20 @@ if(!$caja) {
 }
 $id_caja_actual = $caja['id'];
 
+// --- FIX ERROR 500: CONSULTA SEGURA DE CONFIGURACIÓN ---
+$metodo_transferencia = 'manual'; // Por defecto
+try {
+    $resConf = $conexion->query("SELECT metodo_transferencia FROM configuracion WHERE id=1");
+    if($resConf) {
+        $conf_sys = $resConf->fetch(PDO::FETCH_ASSOC);
+        if($conf_sys && isset($conf_sys['metodo_transferencia'])) {
+            $metodo_transferencia = $conf_sys['metodo_transferencia'];
+        }
+    }
+} catch (Exception $e) { 
+    // Si la columna aún no existe, no rompemos la página, usamos el método manual
+}
+
 try {
     $sqlCupones = "SELECT * FROM cupones WHERE activo = 1 AND (fecha_limite IS NULL OR fecha_limite >= CURDATE())";
     $cupones_db = $conexion->query($sqlCupones)->fetchAll(PDO::FETCH_ASSOC);
@@ -22,9 +41,7 @@ try {
 ?>
 <?php require_once 'includes/layout_header.php'; ?>
 
-
 <style>
-    /* TUS ESTILOS ORIGINALES */
     .tabla-ventas { height: 450px; overflow-y: auto; background: white; border: 1px solid #dee2e6; border-radius: 8px; }
     @media (max-width: 992px) { .tabla-ventas { height: 300px; } }
     
@@ -43,7 +60,6 @@ try {
     .btn-pausada-activa { animation: parpadeo 1.5s infinite; background-color: #ffc107 !important; color: #000 !important; border: 2px solid #e0a800 !important; }
 
     .card-pos { border: none; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border-radius: 12px; }
-    
 </style>
 
     <div class="container pb-5"> 
@@ -124,10 +140,9 @@ try {
                                 <input type="hidden" id="val-puntos-usados" value="0">
                             </div>
                             <div class="d-flex gap-1">
-    <button class="btn btn-sm btn-outline-primary" onclick="abrirModalClientes()"><i class="bi bi-search"></i></button>
-    <button class="btn btn-sm btn-outline-success" onclick="abrirModalClienteRapido()"><i class="bi bi-person-plus-fill"></i></button>
-</div>
-
+                                <button class="btn btn-sm btn-outline-primary" onclick="abrirModalClientes()"><i class="bi bi-search"></i></button>
+                                <button class="btn btn-sm btn-outline-success" onclick="abrirModalClienteRapido()"><i class="bi bi-person-plus-fill"></i></button>
+                            </div>
                         </div>
                         
                         <div id="info-deuda" class="d-none mb-3 text-center">
@@ -183,6 +198,7 @@ try {
                             <select id="metodo-pago" class="form-select form-select-lg">
                                 <option value="Efectivo">💵 Efectivo</option>
                                 <option value="mercadopago">📱 MercadoPago</option>
+                                <option value="Transferencia">🏦 Transferencia</option>
                                 <option value="Debito">💳 Débito</option>
                                 <option value="Credito">💳 Crédito</option>
                                 <option value="Mixto">💸 PAGO MIXTO</option>
@@ -193,6 +209,14 @@ try {
                         <div id="btn-sync-mp" class="d-none mb-3">
                             <button type="button" class="btn btn-primary w-100 fw-bold" onclick="enviarMontoAMercadoPago()">
                                 <i class="bi bi-cloud-upload"></i> CARGAR PRECIO AL QR
+                            </button>
+                        </div>
+                        <div id="btn-escaner" class="d-none mb-3">
+                            <button type="button" class="btn btn-info w-100 fw-bold text-white shadow py-3" onclick="abrirEscanerTransferencia()">
+                                <i class="bi bi-camera-video fs-5 me-2"></i> ACTIVAR LECTOR
+                            </button>
+                            <button type="button" class="btn btn-link w-100 text-muted small mt-1 text-decoration-none" onclick="ejecutarVentaFinalEnBD()">
+                                <small>Omitir escáner y cobrar manual</small>
                             </button>
                         </div>
 
@@ -215,14 +239,12 @@ try {
 
                         <div class="d-flex gap-2 mb-2">
                             <button type="button" class="btn btn-warning fw-bold flex-fill" onclick="suspenderVentaActual()">
-    <i class="bi bi-pause-circle"></i> ESPERA
-</button>
-<button type="button" class="btn btn-info fw-bold flex-fill text-white" onclick="abrirModalSuspendidas()">
-    <i class="bi bi-arrow-counterclockwise"></i> RECUPERAR
-</button>
-
+                                <i class="bi bi-pause-circle"></i> ESPERA
+                            </button>
+                            <button type="button" class="btn btn-info fw-bold flex-fill text-white" onclick="abrirModalSuspendidas()">
+                                <i class="bi bi-arrow-counterclockwise"></i> RECUPERAR
+                            </button>
                         </div>
-
 
                         <div class="d-grid gap-2 mt-auto">
                             <button id="btn-finalizar" class="btn btn-success btn-lg py-3 fw-bold shadow">
@@ -326,27 +348,30 @@ try {
 
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     
     <script>
+        // VARIABLE DE CONFIGURACIÓN PASADA DESDE PHP
+        const metodoTransferenciaConf = '<?php echo $metodo_transferencia; ?>';
+
         let carrito = []; 
         let pagosMixtosConfirmados = null;
         const cuponesDB = <?php echo json_encode($cupones_db); ?>;
-        // Modo compatible para evitar error de "bootstrap is not defined"
         const modalCliente = { show: function(){ $('#modalBuscarCliente').modal('show'); }, hide: function(){ $('#modalBuscarCliente').modal('hide'); } };
         const modalMixto = { show: function(){ $('#modalPagoMixto').modal('show'); }, hide: function(){ $('#modalPagoMixto').modal('hide'); } };
 
-        $(document).ready(function() { 
+       $(document).ready(function() { 
             verificarVentaPausada(); 
-            // Cargar rápidos inicial
             cargarRapidos('');
+            // ESTO ES LO QUE FALTA: Vincula el botón con la función de cobro
+            $('#btn-finalizar').on('click', ejecutarVentaFinalEnBD);
         });
 
         document.addEventListener('keydown', function(e) {
             if(e.key === 'F2') { e.preventDefault(); $('#buscar-producto').focus(); }
             if(e.key === 'F4') { e.preventDefault(); abrirModalClientes(); }
-                        if(e.key === 'F7') { e.preventDefault(); suspenderVentaActual(); }
+            if(e.key === 'F7') { e.preventDefault(); suspenderVentaActual(); }
             if(e.key === 'F8') { e.preventDefault(); abrirModalSuspendidas(); }
-
             if(e.key === 'F9') { e.preventDefault(); $('#btn-finalizar').click(); }
             if(Swal.isVisible()) {
                 if(e.key === 'Enter') { 
@@ -356,7 +381,6 @@ try {
             }
         });
         
-        // --- FUNCIÓN AGREGADA PARA QUE FUNCIONE EL GRID ---
         function cargarRapidos(categoria) {
             $('#grid-rapidos').html('<div class="text-center w-100"><div class="spinner-border spinner-border-sm"></div></div>');
             $('#filtros-rapidos button').removeClass('btn-dark fw-bold').addClass('btn-outline-secondary');
@@ -396,9 +420,7 @@ try {
                 $('#grid-rapidos').html(html);
             });
         }
-        // --------------------------------------------------
 
-        // FUNCIONES DE PAUSA
         function pausarVenta() {
             if(carrito.length === 0) return Swal.fire('Error', 'No hay nada para pausar', 'info');
             let estado = { carrito: carrito, cliente_id: $('#id-cliente').val(), cliente_nombre: $('#lbl-nombre-cliente').text(), cupon: $('#input-cupon').val(), desc_manual: $('#input-desc-manual').val() };
@@ -424,10 +446,27 @@ try {
             else $('#btn-recuperar').addClass('d-none').removeClass('btn-pausada-activa');
         }
 
-        // BUSCADOR CON SEMÁFORO Y CORRECCIÓN DE COMILLAS
         $('#buscar-producto').on('keyup', function(e) {
             if(e.key === 'Enter') {
                 let term = $(this).val(); if(term.length < 1) return;
+                if(term.startsWith('20') && term.length === 13) {
+                    let pluBalanza = term.substring(2, 6); 
+                    let pesoGramos = term.substring(6, 11);
+                    let pesoKgFinal = parseInt(pesoGramos) / 1000;
+                    $.getJSON('acciones/buscar_producto.php', { term: pluBalanza }, function(res) {
+                        if(res.status == 'success' && res.data.length > 0) {
+                            let p = res.data.find(x => x.plu == parseInt(pluBalanza) || x.codigo_barras == pluBalanza);
+                            if(p) {
+                                let pFinal = (parseFloat(p.precio_oferta) > 0) ? parseFloat(p.precio_oferta) : parseFloat(p.precio_venta);
+                                let pesoNeto = pesoKgFinal - (parseFloat(p.tara_defecto) || 0);
+                                if(pesoNeto < 0) pesoNeto = 0;
+                                carrito.push({id:p.id, descripcion:p.descripcion, precio:pFinal, cantidad:pesoNeto});
+                                render(); $('#buscar-producto').val('').focus(); $('#lista-resultados').hide();
+                            } else { Swal.fire('Error', 'PLU de balanza no encontrado', 'error'); }
+                        }
+                    });
+                    return;
+                }
                 $.getJSON('acciones/buscar_producto.php', { term: term }, function(res) {
                     if(res.status == 'success' && res.data.length > 0) {
                         let exacto = res.data.find(p => p.codigo_barras == term);
@@ -443,40 +482,34 @@ try {
                         let html = ''; 
                         res.data.forEach(p => { 
                             let stock = parseFloat(p.stock_actual);
-let colorStock = stock <= (p.stock_minimo||5) ? 'text-danger fw-bold' : 'text-muted';
-let aviso = (stock <= 0 && p.tipo !== 'combo') ? '(AGOTADO)' : '';
+                            let colorStock = stock <= (p.stock_minimo||5) ? 'text-danger fw-bold' : 'text-muted';
+                            let aviso = (stock <= 0 && p.tipo !== 'combo') ? '(AGOTADO)' : '';
+                            let etiquetaStock = '';
 
-let etiquetaStock = '';
+                            if(p.tipo === 'combo') {
+                                if(p.es_ilimitado == 1) {
+                                    etiquetaStock = '<span class="badge bg-primary"><i class="bi bi-infinity"></i> ILIMITADO</span>';
+                                } else if(p.fecha_inicio && p.fecha_fin) {
+                                    let dIni = new Date(p.fecha_inicio + 'T00:00:00').toLocaleDateString('es-AR', {day:'2-digit', month:'2-digit'});
+                                    let dFin = new Date(p.fecha_fin + 'T00:00:00').toLocaleDateString('es-AR', {day:'2-digit', month:'2-digit'});
+                                    etiquetaStock = `<span class="badge bg-info text-dark">${dIni} al ${dFin}</span>`;
+                                } else {
+                                    etiquetaStock = '<span class="badge bg-success">OFERTA</span>';
+                                }
+                            } else {
+                                if(parseFloat(p.precio_oferta) > 0) {
+                                    etiquetaStock = `<span class="badge bg-danger me-1">OFERTA</span> <span class="small ${colorStock}">Stock: ${stock}</span>`;
+                                } else {
+                                    etiquetaStock = `<div class="small ${colorStock}" style="font-size:0.75rem;">Stock: ${stock}</div>`;
+                                }
+                            }
 
-if(p.tipo === 'combo') {
-    if(p.es_ilimitado == 1) {
-        etiquetaStock = '<span class="badge bg-primary"><i class="bi bi-infinity"></i> ILIMITADO</span>';
-    } else if(p.fecha_inicio && p.fecha_fin) {
-        let dIni = new Date(p.fecha_inicio + 'T00:00:00').toLocaleDateString('es-AR', {day:'2-digit', month:'2-digit'});
-        let dFin = new Date(p.fecha_fin + 'T00:00:00').toLocaleDateString('es-AR', {day:'2-digit', month:'2-digit'});
-        etiquetaStock = `<span class="badge bg-info text-dark">${dIni} al ${dFin}</span>`;
-    } else {
-        etiquetaStock = '<span class="badge bg-success">OFERTA</span>';
-    }
-} else {
-    // [NUEVO] Si es producto normal y tiene precio oferta > 0
-    if(parseFloat(p.precio_oferta) > 0) {
-        etiquetaStock = `<span class="badge bg-danger me-1">OFERTA</span> <span class="small ${colorStock}">Stock: ${stock}</span>`;
-        // Tachamos visualmente el precio viejo en la siguiente línea
-    } else {
-        etiquetaStock = `<div class="small ${colorStock}" style="font-size:0.75rem;">Stock: ${stock}</div>`;
-    }
-}
+                            let precioMostrar = `$${p.precio_venta}`;
+                            if(parseFloat(p.precio_oferta) > 0) {
+                                precioMostrar = `<s class="text-muted small me-1">$${p.precio_venta}</s> <span class="text-danger fw-bold">$${p.precio_oferta}</span>`;
+                            }
 
-let precioMostrar = `$${p.precio_venta}`;
-// Si hay oferta, mostramos el precio nuevo
-if(parseFloat(p.precio_oferta) > 0) {
-    precioMostrar = `<s class="text-muted small me-1">$${p.precio_venta}</s> <span class="text-danger fw-bold">$${p.precio_oferta}</span>`;
-}
-
-                            // Escape de comillas para evitar errores
                             let jsonProducto = JSON.stringify(p).replace(/'/g, "&#39;");
-
                             html += `
                             <div class="item-resultado d-flex justify-content-between align-items-center" onclick='seleccionarProducto(${jsonProducto})'>
                                 <div>
@@ -493,17 +526,59 @@ if(parseFloat(p.precio_oferta) > 0) {
         });
 
         window.seleccionarProducto = function(p) {
+            let pFinal = (parseFloat(p.precio_oferta) > 0) ? parseFloat(p.precio_oferta) : parseFloat(p.precio_venta);
+            if(p.tipo === 'pesable') {
+                $('#idProdPesable').val(p.id);
+                $('#nombreProdPesable').text(p.descripcion);
+                $('#precioKgPesable').val(pFinal);
+                $('#inputTaraManual').val(p.tara_defecto || 0);
+                $('#inputPesoManual').val('');
+                $('#totalCalculadoPesable').text('$0.00');
+                var myModal = new bootstrap.Modal(document.getElementById('modalPesable'));
+                myModal.show();
+                $('#modalPesable').on('shown.bs.modal', function () { $('#inputPesoManual').focus(); });
+                $('#buscar-producto').val('').focus(); $('#lista-resultados').hide();
+                return;
+            }
             let ex = carrito.find(i => i.id === p.id); 
-            let pFinal = (parseFloat(p.precio_oferta) > 0) ? parseFloat(p.precio_oferta) : parseFloat(p.precio_venta); if(ex) ex.cantidad++; else carrito.push({id:p.id, descripcion:p.descripcion, precio:pFinal, cantidad:1});
+            if(ex) ex.cantidad++; else carrito.push({id:p.id, descripcion:p.descripcion, precio:pFinal, cantidad:1});
             render(); $('#buscar-producto').val('').focus(); $('#lista-resultados').hide();
         };
 
-        // FUNCIÓN SELECCIONAR CLIENTE MEJORADA
+        $(document).on('input change', '#inputPesoManual, #inputTaraManual, #unidadMedidaPesable', function() {
+            let pesoIngresado = parseFloat($('#inputPesoManual').val()) || 0;
+            let tara = parseFloat($('#inputTaraManual').val()) || 0;
+            let unidad = $('#unidadMedidaPesable').val();
+            let precioKg = parseFloat($('#precioKgPesable').val());
+            let pesoEnKg = (unidad === 'gr') ? (pesoIngresado / 1000) : pesoIngresado;
+            let pesoNeto = pesoEnKg - tara;
+            if(pesoNeto < 0) pesoNeto = 0;
+            $('#totalCalculadoPesable').text('$' + (pesoNeto * precioKg).toFixed(2));
+        });
+
+        $(document).on('click', '#btnAgregarPesableCarrito', function() {
+            let idProd = $('#idProdPesable').val();
+            let nombreProd = $('#nombreProdPesable').text();
+            let precioKg = parseFloat($('#precioKgPesable').val());
+            let pesoIngresado = parseFloat($('#inputPesoManual').val()) || 0;
+            let tara = parseFloat($('#inputTaraManual').val()) || 0;
+            let unidad = $('#unidadMedidaPesable').val();
+            if(pesoIngresado <= 0) return Swal.fire('Atención', 'Ingrese un peso válido', 'warning');
+            
+            let pesoEnKg = (unidad === 'gr') ? (pesoIngresado / 1000) : pesoIngresado;
+            let pesoNetoFinal = pesoEnKg - tara;
+            if(pesoNetoFinal < 0) pesoNetoFinal = 0;
+
+            let ex = carrito.find(i => i.id == idProd);
+            if(ex) ex.cantidad += pesoNetoFinal; else carrito.push({id: idProd, descripcion: nombreProd, precio: precioKg, cantidad: pesoNetoFinal});
+            render();
+            bootstrap.Modal.getInstance(document.getElementById('modalPesable')).hide();
+        });
+
         window.seleccionarCliente = function(id, nombre, saldo, puntos) {
             $('#id-cliente').val(id);
             $('#lbl-nombre-cliente').text(nombre);
             
-            // Lógica de Saldos
             $('#val-deuda').val(parseFloat(saldo) || 0);
             if(saldo > 0) {
                 $('#lbl-deuda').text('$' + parseFloat(saldo).toFixed(2));
@@ -520,7 +595,6 @@ if(parseFloat(p.precio_oferta) > 0) {
                 $('#info-saldo').addClass('d-none');
             }
 
-            // Lógica de Puntos (NUEVO)
             let pts = puntos ? parseFloat(puntos.toString().replace(/,/g, '')) : 0;
             $('#val-puntos').val(pts);
             
@@ -563,7 +637,6 @@ if(parseFloat(p.precio_oferta) > 0) {
             $('#metodo-pago').val('Efectivo');
             $('#box-vuelto').show();
             $('#box-mixto-info').addClass('d-none');
-            // Resetear puntos
             $('#usar-puntos').prop('checked', false);
             $('#val-puntos-usados').val(0);
             render(); 
@@ -571,68 +644,49 @@ if(parseFloat(p.precio_oferta) > 0) {
         
         $('#paga-con').on('keyup', calc); $('#input-desc-manual').on('keyup change', calc); $('#input-cupon').on('keyup', validarCupon);
 
-                        function validarCupon() {
+        function validarCupon() {
             let codigo = $('#input-cupon').val().toUpperCase(); 
             let idCliente = parseInt($('#id-cliente').val()); 
             let msg = $('#msg-cupon');
-            
-            // Obtenemos la fecha de hoy en formato YYYY-MM-DD
             let hoy = new Date();
             let offset = hoy.getTimezoneOffset();
             hoy = new Date(hoy.getTime() - (offset*60*1000));
             let fechaHoy = hoy.toISOString().split('T')[0];
 
             if(codigo.length === 0) { 
-                msg.hide(); 
-                $('#total-venta').attr('data-porc-desc', 0); 
-                calc(); 
-                return; 
+                msg.hide(); $('#total-venta').attr('data-porc-desc', 0); calc(); return; 
             }
 
-            // Buscamos el cupón en el array que viene de la BD
             let cupon = cuponesDB.find(c => c.codigo === codigo);
 
             if(cupon) {
-                // 1. PRIORIDAD: VALIDAR VENCIMIENTO
                 if(cupon.fecha_limite < fechaHoy) {
                     msg.text('❌ CUPÓN VENCIDO (' + cupon.fecha_limite + ')').attr('class','small fw-bold mt-1 text-danger').show();
                     $('#total-venta').attr('data-porc-desc', 0);
-                } 
-                // 2. VALIDAR LÍMITE DE USOS
-                else if(parseInt(cupon.cantidad_limite) > 0 && parseInt(cupon.usos_actuales) >= parseInt(cupon.cantidad_limite)) {
+                } else if(parseInt(cupon.cantidad_limite) > 0 && parseInt(cupon.usos_actuales) >= parseInt(cupon.cantidad_limite)) {
                     msg.text('❌ LÍMITE DE USOS AGOTADO').attr('class','small fw-bold mt-1 text-danger').show();
                     $('#total-venta').attr('data-porc-desc', 0);
-                }
-                // 3. VALIDAR CLIENTE (SI TIENE UNO ASIGNADO)
-                else if(cupon.id_cliente && cupon.id_cliente != idCliente) {
+                } else if(cupon.id_cliente && cupon.id_cliente != idCliente) {
                     msg.text('❌ NO VÁLIDO PARA ESTE CLIENTE').attr('class','small fw-bold mt-1 text-danger').show();
                     $('#total-venta').attr('data-porc-desc', 0);
-                } 
-                // 4. TODO CORRECTO
-                else {
+                } else {
                     msg.text('✅ DESCUENTO ' + cupon.descuento_porcentaje + '% APLICADO').attr('class','small fw-bold mt-1 text-success').show();
                     $('#total-venta').attr('data-porc-desc', cupon.descuento_porcentaje);
                 }
             } else {
-                // Si no se encuentra el código en el array
                 msg.text('❌ CÓDIGO INEXISTENTE').attr('class','small fw-bold mt-1 text-danger').show();
                 $('#total-venta').attr('data-porc-desc', 0);
             }
             calc();
         }
 
-
-
         function calc(){ 
             let subtotal = parseFloat($('#total-venta').attr('data-subtotal')) || 0;
             let porcDesc = parseFloat($('#total-venta').attr('data-porc-desc')) || 0;
             let manualDesc = parseFloat($('#input-desc-manual').val()) || 0;
-            
-            // 1. Calcular descuento cupón
             let descuentoCupon = (subtotal * porcDesc) / 100;
             let aPagarTemp = subtotal - descuentoCupon - manualDesc;
 
-            // 2. Calcular Puntos
             let descuentoPuntos = 0;
             if($('#usar-puntos').is(':checked') && aPagarTemp > 0) {
                 let puntosDisponibles = parseFloat($('#val-puntos').val()) || 0;
@@ -642,7 +696,6 @@ if(parseFloat(p.precio_oferta) > 0) {
             aPagarTemp -= descuentoPuntos;
             $('#val-puntos-usados').val(descuentoPuntos);
 
-            // 3. Calcular Saldo a Favor
             let saldoUsado = 0;
             if($('#usar-saldo').is(':checked') && aPagarTemp > 0){
                 let disponible = parseFloat($('#val-saldo').val()) || 0;
@@ -664,20 +717,16 @@ if(parseFloat(p.precio_oferta) > 0) {
             if(infoTxt != '') $('#info-subtotal').text(infoTxt).show(); 
             else $('#info-subtotal').hide();
 
-            // LOGICA DEUDA (SOLO SI NO ES MIXTO)
             if($('#metodo-pago').val() !== 'Mixto') {
                 let paga = parseFloat($('#paga-con').val()) || 0; 
                 let vueltoPre = paga - totalFinal; 
-                
                 let deudaCliente = parseFloat($('#val-deuda').val()) || 0;
                 let montoDeudaCobrar = 0;
 
                 if(vueltoPre > 0 && deudaCliente > 0) {
                     montoDeudaCobrar = (vueltoPre >= deudaCliente) ? deudaCliente : vueltoPre;
                 }
-                
                 $('#pago-deuda-calculado').val(montoDeudaCobrar);
-
                 let vueltoFinal = vueltoPre - montoDeudaCobrar;
 
                 if(vueltoFinal >= 0 && paga > 0) { 
@@ -706,10 +755,11 @@ if(parseFloat(p.precio_oferta) > 0) {
             }
         }
         
-                $('#metodo-pago').change(function(){ 
+        $('#metodo-pago').change(function(){ 
             let val = $(this).val();
             $('#btn-sync-mp').addClass('d-none');
-            $('#btn-finalizar').removeClass('d-none'); // Mostrar por defecto
+            $('#btn-escaner').addClass('d-none'); 
+            $('#btn-finalizar').removeClass('d-none');
 
             if(val == 'Mixto') {
                 $('#box-vuelto').hide();
@@ -718,17 +768,26 @@ if(parseFloat(p.precio_oferta) > 0) {
             } else if(val == 'Efectivo') {
                 $('#box-vuelto').slideDown();
                 $('#box-mixto-info').addClass('d-none');
-            } else if(val == 'mercadopago') { // NOMBRE CORREGIDO
+            } else if(val == 'mercadopago') { 
                 $('#box-vuelto').slideUp();
                 $('#btn-sync-mp').removeClass('d-none'); 
-                $('#btn-finalizar').addClass('d-none'); // <--- ACÁ ESCONDEMOS EL BOTÓN DE CONFIRMAR
+                $('#btn-finalizar').addClass('d-none'); 
                 $('#box-mixto-info').addClass('d-none');
+            } else if(val == 'Transferencia') {
+                $('#box-vuelto').slideUp();
+                $('#box-mixto-info').addClass('d-none');
+                
+                // Muestra "Activar Lector" y oculta "Confirmar Venta"
+                $('#btn-escaner').removeClass('d-none');
+                $('#btn-finalizar').addClass('d-none');
             } else {
                 $('#box-vuelto').slideUp();
                 $('#box-mixto-info').addClass('d-none');
             }
             calc();
         });
+
+
         function abrirModalMixto() {
             if(carrito.length === 0) {
                 Swal.fire('Error', 'Carrito vacío', 'error');
@@ -751,7 +810,6 @@ if(parseFloat(p.precio_oferta) > 0) {
             let mp = parseFloat($('#mix-mp').val()) || 0;
             let db = parseFloat($('#mix-debito').val()) || 0;
             let cr = parseFloat($('#mix-credito').val()) || 0;
-            
             let suma = ef + mp + db + cr;
             let faltan = total - suma;
             
@@ -788,17 +846,14 @@ if(parseFloat(p.precio_oferta) > 0) {
 
         window.abrirModalClientes = function() { $('#input-search-modal').val(''); $('#lista-clientes-modal').html(''); modalCliente.show(); setTimeout(()=>$('#input-search-modal').focus(),500); };
         
-        // BUSCADOR DE CLIENTES (CORREGIDO PARA PASAR PUNTOS)
         $('#input-search-modal').on('keyup', function() {
             let term = $(this).val(); 
             if(term.length < 2) return;
-            
             $.getJSON('acciones/buscar_cliente_ajax.php', { term: term }, function(res) {
                 let html = ''; 
                 if(res.length > 0) {
                     res.forEach(c => { 
                         let dni = c.dni ? c.dni : '--'; 
-                        
                         let saldoVal = parseFloat(c.saldo.toString().replace(/,/g, '')) || 0;
                         let saldoClass = saldoVal > 0 ? 'text-danger fw-bold' : (saldoVal < 0 ? 'text-success fw-bold' : 'text-muted');
                         let saldoTexto = saldoVal > 0 ? 'Debe: $' + c.saldo : (saldoVal < 0 ? 'Favor: $' + Math.abs(saldoVal) : 'Al día');
@@ -825,147 +880,198 @@ if(parseFloat(p.precio_oferta) > 0) {
             });
         });
 
-        // PROCESAR VENTA (FINALIZAR - CORREGIDO RUTA)
-        // PROCESAR VENTA (FINALIZAR)
-        // PROCESAR VENTA (FINALIZAR)
-        // PROCESAR VENTA (FINALIZAR)
-$('#btn-finalizar').click(function() {
-    if(carrito.length === 0) return Swal.fire('Error', 'El carrito está vacío.', 'error');
-    
-    let total = parseFloat($('#total-venta').attr('data-total-final'));
-    let metodo = $('#metodo-pago').val();
-    let idCliente = $('#id-cliente').val();
-    
-    let cupon = $('#input-cupon').val();
-    let descManual = $('#input-desc-manual').val();
-    let saldoUsado = ($('#usar-saldo').is(':checked')) ? $('#val-saldo').val() : 0;
-    let puntosUsados = $('#val-puntos-usados').val(); 
-    
-    let pagosMixtos = null;
-    if(metodo === 'Mixto') {
-        if(!pagosMixtosConfirmados) return Swal.fire('Atención', 'Debes confirmar el desglose del Pago Mixto.', 'warning');
-        pagosMixtos = JSON.stringify(pagosMixtosConfirmados);
-    }
+        // =========================================================================
+        // MOTOR DE CAPTURA MANUAL HD (SIN ERRORES DE API)
+        // =========================================================================
 
-    let pagoDeuda = $('#pago-deuda-calculado').val();
-
-    let boton = $(this);
-    boton.prop('disabled', true).html('<span class="spinner-border spinner-border-sm"></span> Procesando...');
-
-    $.post('acciones/procesar_venta.php', {
-        items: carrito,
-        total: total,
-        metodo_pago: metodo,
-        id_cliente: idCliente,
-        cupon_codigo: cupon,
-        desc_manual_monto: descManual,
-        saldo_favor_usado: saldoUsado,
-        pago_deuda: pagoDeuda,
-        pagos_mixtos: pagosMixtos,
-        descuento_puntos_monto: puntosUsados 
-    }, function(res) {
-        boton.prop('disabled', false).html('<i class="bi bi-check-lg"></i> CONFIRMAR VENTA');
+        function abrirEscanerTransferencia() {
+    let montoEsperado = parseFloat($('#total-venta').attr('data-total-final'));
+    let inputCam = document.createElement('input');
+    inputCam.type = 'file';
+    inputCam.accept = 'image/*';
+    inputCam.capture = 'environment';
+    
+    inputCam.onchange = function(e) {
+        let file = e.target.files[0];
+        if(!file) return;
         
+        Swal.fire({ title: 'Procesando...', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); } });
+
+        let reader = new FileReader();
+        reader.onload = function(event) {
+            let img = new Image();
+            img.src = event.target.result;
+            img.onload = function() {
+                let canvas = document.createElement('canvas');
+                let ctx = canvas.getContext('2d');
+                
+                // Redimensionar para que no pese (Adiós error de memoria)
+                let scale = 1000 / img.width;
+                canvas.width = 1000;
+                canvas.height = img.height * scale;
+                
+                // --- FILTRO DE ALTO CONTRASTE (Esto hace que el OCR funcione) ---
+                ctx.filter = 'grayscale(100%) contrast(200%)';
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                
+                let fotoProcesada = canvas.toDataURL('image/jpeg', 0.8);
+                
+                // Enviamos al servidor
+                $.post('acciones/analizar_ocr.php', { 
+                    imagen: fotoProcesada, 
+                    monto: montoEsperado 
+                }, function(res) {
+                    if(res.status === 'success') {
+                        Swal.fire({
+                            icon: res.coincide ? 'success' : 'warning',
+                            title: res.coincide ? '¡Transferencia OK!' : 'Revisión Manual',
+                            html: `Monto: <b>$${res.monto_leido}</b><br>Op: ${res.operacion}`,
+                            confirmButtonText: 'CONFIRMAR VENTA'
+                        }).then(() => { ejecutarVentaFinalEnBD(); });
+                    } else {
+                        Swal.fire('Error', res.msg, 'error');
+                    }
+                }, 'json');
+            };
+        };
+        reader.readAsDataURL(file);
+    };
+    inputCam.click();
+}
+
+// Función auxiliar para el envío limpio
+function enviarImagenComprimida(base64, monto) {
+    Swal.fire({ title: 'Analizando con IA...', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); } });
+
+    $.post('acciones/analizar_ocr.php', { imagen: base64, monto: monto }, function(res) {
         if(res.status === 'success') {
-            let idVenta = res.id_venta;
-            let idClienteActual = $('#id-cliente').val(); 
-            
-            // Botones de la Modal
-            let botonesHtml = `
-                <div class="d-grid gap-2">
-                    <button onclick="window.open('ticket.php?id=${idVenta}', 'pop-up', 'width=300,height=600')" class="btn btn-dark btn-lg py-3">
-                        <i class="bi bi-printer"></i> IMPRIMIR TICKET
-                    </button>`;
-
-            // Solo mostrar correo si NO es Consumidor Final (ID 1)
-            if(idClienteActual && idClienteActual != "1") { 
-                botonesHtml += `
-                    <button onclick="enviarTicketEmail(${idVenta})" class="btn btn-outline-primary py-2">
-                        <i class="bi bi-envelope"></i> Enviar por Correo
-                    </button>`;
-            }
-
-            botonesHtml += `
-                    <hr>
-                    <button onclick="location.reload()" class="btn btn-success btn-lg py-3">
-                        <i class="bi bi-plus-circle"></i> NUEVA VENTA
-                    </button>
-                </div>`;
-
             Swal.fire({
-                icon: 'success',
-                title: '<span style="color:#198754">¡VENTA EXITOSA!</span>',
-                html: botonesHtml,
-                showConfirmButton: false,
-                allowOutsideClick: false
-            });
+                icon: res.coincide ? 'success' : 'warning',
+                title: res.coincide ? '¡Validado!' : 'Monto no coincide',
+                html: `Monto Leído: <b>$${res.monto_leido}</b><br>Op: ${res.operacion || 'S/N'}`,
+                confirmButtonText: 'COBRAR AHORA'
+            }).then(() => { ejecutarVentaFinalEnBD(); });
         } else {
             Swal.fire('Error', res.msg, 'error');
         }
-    }, 'json');
-});
-        
-                // --- FUNCIONES DE SUSPENSIÓN (AGREGADAS AL FINAL) ---
+    }, 'json').fail(() => {
+        Swal.fire('Error Crítico', 'El servidor no pudo procesar la imagen.', 'error');
+    });
+}
 
+        function procesarFotoConIA(monto, base64) {
+            Swal.fire({
+                title: 'Analizando con Gemini Pro...',
+                html: '<small class="text-muted fw-bold">Extrayendo datos de la foto 4K...</small>',
+                allowOutsideClick: false,
+                didOpen: () => { Swal.showLoading(); }
+            });
+
+            $.post('acciones/analizar_con_gemini.php', {
+                imagen: base64,
+                monto: monto
+            }, function(res) {
+                if(res.status === 'success') {
+                    let g = res.gemini;
+                    if(g.coincide_monto) {
+                        Swal.fire({
+                            icon: 'success', title: '¡Transferencia OK!',
+                            html: `Validado por IA.<br>Monto: <b>$${g.monto_leido}</b><br><small>Op: ${g.operacion}</small>`,
+                            timer: 2500, showConfirmButton: false
+                        }).then(() => { ejecutarVentaFinalEnBD(); });
+                    } else {
+                        Swal.fire({
+                            title: 'Revisión Necesaria',
+                            html: `Gemini leyó <b>$${g.monto_leido}</b> pero la venta es de <b>$${monto}</b>.<br><br><b>¿Autorizás el cobro igual?</b>`,
+                            icon: 'warning', showCancelButton: true, confirmButtonText: 'Sí, cobrar', cancelButtonText: 'Cancelar', confirmButtonColor: '#ffc107'
+                        }).then((r) => { if(r.isConfirmed) { ejecutarVentaFinalEnBD(); } });
+                    }
+                } else {
+                    Swal.fire('Error de IA', res.msg, 'error');
+                }
+            }, 'json').fail(() => {
+                Swal.fire('Error', 'Fallo la comunicación con el servidor de Google.', 'error');
+            });
+        }
+
+        function ejecutarVentaFinalEnBD() {
+            let total = parseFloat($('#total-venta').attr('data-total-final'));
+            let metodo = $('#metodo-pago').val();
+            let idCliente = $('#id-cliente').val();
+            let cupon = $('#input-cupon').val();
+            let descManual = $('#input-desc-manual').val();
+            let saldoUsado = ($('#usar-saldo').is(':checked')) ? $('#val-saldo').val() : 0;
+            let puntosUsados = $('#val-puntos-usados').val(); 
+            
+            let pagosMixtos = null;
+            if(metodo === 'Mixto') {
+                if(!pagosMixtosConfirmados) return Swal.fire('Atención', 'Debes confirmar el pago mixto.', 'warning');
+                pagosMixtos = JSON.stringify(pagosMixtosConfirmados);
+            }
+
+            let pagoDeuda = $('#pago-deuda-calculado').val();
+            let boton = $('#btn-finalizar');
+            
+            boton.prop('disabled', true).html('<span class="spinner-border spinner-border-sm"></span> Procesando...');
+
+            $.post('acciones/procesar_venta.php', {
+                items: carrito, total: total, metodo_pago: metodo, id_cliente: idCliente,
+                cupon_codigo: cupon, desc_manual_monto: descManual, saldo_favor_usado: saldoUsado,
+                pago_deuda: pagoDeuda, pagos_mixtos: pagosMixtos, descuento_puntos_monto: puntosUsados 
+            }, function(res) {
+                boton.prop('disabled', false).html('<i class="bi bi-check-lg"></i> CONFIRMAR VENTA');
+                if(res.status === 'success') {
+                    let idVenta = res.id_venta;
+                    let idClienteActual = $('#id-cliente').val(); 
+                    let botonesHtml = `
+                        <div class="d-grid gap-2">
+                            <button onclick="window.open('ticket.php?id=${idVenta}', 'pop-up', 'width=300,height=600')" class="btn btn-dark btn-lg py-3">
+                                <i class="bi bi-printer"></i> IMPRIMIR TICKET
+                            </button>`;
+                    if(idClienteActual && idClienteActual != "1") { 
+                        botonesHtml += `<button onclick="enviarTicketEmail(${idVenta})" class="btn btn-outline-primary py-2"><i class="bi bi-envelope"></i> Enviar por Correo</button>`;
+                    }
+                    botonesHtml += `<hr><button onclick="location.reload()" class="btn btn-success btn-lg py-3"><i class="bi bi-plus-circle"></i> NUEVA VENTA</button></div>`;
+
+                    Swal.fire({ icon: 'success', title: '<span style="color:#198754">¡VENTA EXITOSA!</span>', html: botonesHtml, showConfirmButton: false, allowOutsideClick: false });
+                } else {
+                    Swal.fire('Error', res.msg, 'error');
+                }
+            }, 'json');
+        }
+        
         function suspenderVentaActual() {
             if (carrito.length === 0) return Swal.fire('Atención', 'No hay productos para suspender.', 'warning');
-
             let totalVenta = parseFloat($('#total-venta').attr('data-total-final')) || 0;
-            // Tomamos el nombre del cliente actual como sugerencia inicial
             let nombreCliente = $('#lbl-nombre-cliente').text();
             let valorInicial = (nombreCliente !== 'Consumidor Final') ? nombreCliente : '';
-
-            // 1. Pedir Referencia con ventana en el medio
             Swal.fire({
                 title: 'Suspender Venta',
-                text: 'Escribí una referencia para identificar al cliente (Ej: "Chico gorra roja", "Señora rubia"):',
+                text: 'Escribí una referencia para identificar al cliente (Ej: "Chico gorra roja"):',
                 input: 'text',
                 inputValue: valorInicial,
                 showCancelButton: true,
                 confirmButtonText: '<i class="bi bi-save"></i> Suspender',
                 cancelButtonText: 'Cancelar',
-                confirmButtonColor: '#ffc107', // Color amarillo de advertencia/pausa
+                confirmButtonColor: '#ffc107',
                 cancelButtonColor: '#6c757d',
-                inputValidator: (value) => {
-                    if (!value) {
-                        return '¡Por favor escribí alguna referencia para no perderla!';
-                    }
-                }
+                inputValidator: (value) => { if (!value) return '¡Escribí alguna referencia!'; }
             }).then((result) => {
                 if (result.isConfirmed) {
                     let referencia = result.value;
-
-                    // 2. Enviar a guardar
                     fetch('acciones/suspender_guardar.php', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            carrito: carrito,
-                            total: totalVenta,
-                            referencia: referencia // Acá va lo que escribiste
-                        })
+                        body: JSON.stringify({ carrito: carrito, total: totalVenta, referencia: referencia })
                     })
                     .then(response => response.json())
                     .then(data => {
                         if (data.status === 'success') {
                             vaciarCarrito();
-                            
-                            // 3. Cartel de éxito en el medio (SweetAlert standard)
-                            Swal.fire({
-                                icon: 'success',
-                                title: '¡Venta Suspendida!',
-                                text: 'La venta se guardó correctamente bajo la referencia: "' + referencia + '"',
-                                showConfirmButton: true,
-                                timer: 2000 // Se cierra solo a los 2 segundos o si tocas OK
-                            });
-                        } else {
-                            Swal.fire('Error', data.msg || 'No se pudo suspender', 'error');
-                        }
+                            Swal.fire({ icon: 'success', title: '¡Venta Suspendida!', text: 'Se guardó: "' + referencia + '"', timer: 2000 });
+                        } else { Swal.fire('Error', data.msg || 'No se pudo suspender', 'error'); }
                     })
-                    .catch(error => {
-                        console.error(error);
-                        Swal.fire('Error', 'Error de conexión al suspender', 'error');
-                    });
+                    .catch(error => { console.error(error); Swal.fire('Error', 'Error de conexión', 'error'); });
                 }
             });
         }
@@ -977,43 +1083,23 @@ $('#btn-finalizar').click(function() {
             });
         }
 
-        // Esta función la usa el botón "Recuperar" que viene del PHP
         window.recuperarVentaId = function(idVentaSusp) {
             $.getJSON('acciones/suspender_recuperar.php', { id: idVentaSusp }, function(res) {
                 if(res.status === 'success') {
                     vaciarCarrito();
-                    
-                    // Reconstruir carrito con los datos que vienen de la base de datos
                     if(res.items && res.items.length > 0) {
                         res.items.forEach(item => {
-                            carrito.push({
-                                id: item.id,
-                                descripcion: item.nombre, // Adaptamos nombre -> descripcion
-                                precio: parseFloat(item.precio),
-                                cantidad: parseInt(item.cantidad)
-                            });
+                            carrito.push({ id: item.id, descripcion: item.nombre, precio: parseFloat(item.precio), cantidad: parseInt(item.cantidad) });
                         });
                     }
-
-                    // Recuperar Cliente si existe
-                    if(res.cliente) {
-                        seleccionarCliente(res.cliente.id, res.cliente.nombre, res.cliente.saldo, res.cliente.puntos);
-                    }
-                    
-                    render(); // Actualizar tabla visual
-                    
-                    // Cerrar modal
-                    const modalEl = document.getElementById('modalSuspendidas');
-                    const modalInstance = bootstrap.Modal.getInstance(modalEl);
-                    if(modalInstance) modalInstance.hide();
-                    
-                    const Toast = Swal.mixin({toast: true, position: 'top-end', showConfirmButton: false, timer: 2000});
-                    Toast.fire({icon: 'success', title: 'Venta recuperada'});
-                } else {
-                    Swal.fire('Error', 'No se pudo recuperar la venta', 'error');
-                }
+                    if(res.cliente) { seleccionarCliente(res.cliente.id, res.cliente.nombre, res.cliente.saldo, res.cliente.puntos); }
+                    render(); 
+                    bootstrap.Modal.getInstance(document.getElementById('modalSuspendidas')).hide();
+                    Swal.fire({icon: 'success', title: 'Venta recuperada', toast: true, position: 'top-end', timer: 2000, showConfirmButton: false});
+                } else { Swal.fire('Error', 'No se pudo recuperar', 'error'); }
             });
         };
+
         function eliminarVentaSuspendida(id) {
             Swal.fire({
                 title: '¿Eliminar esta espera?',
@@ -1022,106 +1108,90 @@ $('#btn-finalizar').click(function() {
                 showCancelButton: true,
                 confirmButtonColor: '#d33',
                 cancelButtonColor: '#6c757d',
-                confirmButtonText: 'Sí, eliminar',
-                cancelButtonText: 'Cancelar'
+                confirmButtonText: 'Sí, eliminar'
             }).then((result) => {
                 if (result.isConfirmed) {
                     $.post('acciones/suspender_eliminar.php', { id: id }, function(res) {
                         if(res.status === 'success') {
-                            // Recargar la lista para que desaparezca la eliminada
-                            $.get('acciones/suspender_listar.php', function(html) {
-                                $('#listaSuspendidasBody').html(html);
-                            });
-                            
-                            // Pequeña notificación
-                            const Toast = Swal.mixin({toast: true, position: 'top-end', showConfirmButton: false, timer: 1500});
-                            Toast.fire({icon: 'success', title: 'Eliminada'});
-                        } else {
-                            Swal.fire('Error', res.msg, 'error');
-                        }
+                            $.get('acciones/suspender_listar.php', function(html) { $('#listaSuspendidasBody').html(html); });
+                            Swal.fire({icon: 'success', title: 'Eliminada', toast: true, position: 'top-end', timer: 1500, showConfirmButton: false});
+                        } else { Swal.fire('Error', res.msg, 'error'); }
                     }, 'json');
                 }
             });
         }
+
         function abrirModalClienteRapido() { $('#modalClienteRapido').modal('show'); }
 
-function guardarClienteRapido() {
-    let datos = {
-        nombre: $('#rapido-nombre').val(),
-        dni: $('#rapido-dni').val(),
-        whatsapp: $('#rapido-wa').val(),
-        email: $('#rapido-email').val()
-    };
-    $.post('acciones/cliente_rapido.php', datos, function(res) {
-        if(res.status === 'success') {
-            seleccionarCliente(res.id, res.nombre, 0, 0);
-            $('#modalClienteRapido').modal('hide');
-            Swal.fire('¡Listo!', 'Cliente registrado y seleccionado', 'success');
-        } else { Swal.fire('Error', res.msg, 'error'); }
-    }, 'json');
-}
-
-function enviarTicketWhatsApp(idVenta) {
-    // Extraemos número de WhatsApp de los datos cargados o pedimos confirmación
-    Swal.fire({
-        title: 'Enviar WhatsApp',
-        input: 'text',
-        inputLabel: 'Confirmar número (incluir código de país sin +)',
-        inputValue: $('#rapido-wa').val() || '549',
-        showCancelButton: true,
-        confirmButtonText: 'Enviar'
-    }).then((result) => {
-        if (result.isConfirmed) {
-            let msg = encodeURIComponent('Hola! Te adjuntamos tu ticket de compra #'+idVenta+' de Drogstore El 10. Podés verlo aquí: http://'+window.location.host+'/ticket_digital.php?id='+idVenta);
-            window.open(`https://wa.me/${result.value}?text=${msg}`, '_blank');
+        function guardarClienteRapido() {
+            $.post('acciones/cliente_rapido.php', {
+                nombre: $('#rapido-nombre').val(), dni: $('#rapido-dni').val(),
+                whatsapp: $('#rapido-wa').val(), email: $('#rapido-email').val()
+            }, function(res) {
+                if(res.status === 'success') {
+                    seleccionarCliente(res.id, res.nombre, 0, 0);
+                    $('#modalClienteRapido').modal('hide');
+                    Swal.fire('¡Listo!', 'Cliente registrado', 'success');
+                } else { Swal.fire('Error', res.msg, 'error'); }
+            }, 'json');
         }
-    });
-}
 
-function enviarTicketEmail(idVenta) {
-    Swal.fire({
-        title: 'Enviando correo...',
-        didOpen: () => { Swal.showLoading(); }
-    });
-    $.post('acciones/enviar_ticket_email.php', { id: idVenta }, function(res) {
-        if(res.status === 'success') { Swal.fire('Enviado', 'El ticket fue enviado al correo del cliente', 'success'); }
-        else { Swal.fire('Error', res.msg, 'error'); }
-    }, 'json');
-}
-
-// Variable global para el control del tiempo
-let intervaloMP = null;
-
-function enviarMontoAMercadoPago() {
-    let total = parseFloat($('#total-venta').attr('data-total-final')) || 0;
-    if(total <= 0) return Swal.fire('Error', 'El monto debe ser mayor a 0', 'error');
-
-    const btn = $('#btn-sync-mp button');
-    btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm"></span> Esperando...');
-
-    $.post('acciones/mp_sync.php', { total: total }, function(res) {
-        if(res.status === 'success') {
-            const ref = res.referencia;
-            Swal.fire({ icon: 'info', title: 'Esperando Pago', text: 'El cliente debe escanear el QR', showConfirmButton: false });
-
-            if(intervaloMP) clearInterval(intervaloMP);
-            intervaloMP = setInterval(function() {
-                $.getJSON('acciones/verificar_pago_mp.php', { referencia: ref }, function(statusRes) {
-                    if(statusRes.estado === 'pagado') {
-                        clearInterval(intervaloMP);
-                        Swal.close();
-
-                        // 1. Forzamos que el selector diga "mercadopago"
-                        $('#metodo-pago').val('mercadopago');
-                        
-                        // 2. Mostramos el botón un segundo y le damos clic solo
-                        $('#btn-finalizar').removeClass('d-none').click(); 
-                    }
-                });
-            }, 3000);
+        function enviarTicketWhatsApp(idVenta) {
+            Swal.fire({
+                title: 'Enviar WhatsApp', input: 'text', inputLabel: 'Confirmar número',
+                inputValue: $('#rapido-wa').val() || '549', showCancelButton: true, confirmButtonText: 'Enviar'
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    let msg = encodeURIComponent('Hola! Te adjuntamos tu ticket de compra #'+idVenta+'. Míralo aquí: http://'+window.location.host+'/ticket_digital.php?id='+idVenta);
+                    window.open(`https://wa.me/${result.value}?text=${msg}`, '_blank');
+                }
+            });
         }
-    }, 'json');
-}
+
+        function enviarTicketEmail(idVenta) {
+            Swal.fire({ title: 'Enviando correo...', didOpen: () => { Swal.showLoading(); } });
+            $.post('acciones/enviar_ticket_email.php', { id: idVenta }, function(res) {
+                if(res.status === 'success') { Swal.fire('Enviado', 'Ticket enviado al cliente', 'success'); }
+                else { Swal.fire('Error', res.msg, 'error'); }
+            }, 'json');
+        }
+
+        let intervaloMP = null;
+        function enviarMontoAMercadoPago() {
+            let total = parseFloat($('#total-venta').attr('data-total-final')) || 0;
+            if(total <= 0) return Swal.fire('Error', 'El monto debe ser mayor a 0', 'error');
+
+            const btn = $('#btn-sync-mp button');
+            btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm"></span> Esperando...');
+
+            $.post('acciones/mp_sync.php', { total: total }, function(res) {
+                if(res.status === 'success') {
+                    const ref = res.referencia;
+                    Swal.fire({ icon: 'info', title: 'Esperando Pago', text: 'El cliente debe escanear el QR', showConfirmButton: false, showCancelButton: true, cancelButtonText: '🛑 Cancelar Espera', cancelButtonColor: '#dc3545', allowOutsideClick: false }).then((result) => {
+                        if (result.dismiss === Swal.DismissReason.cancel) {
+                            if(intervaloMP) clearInterval(intervaloMP);
+                            btn.prop('disabled', false).html('<i class="bi bi-cloud-upload"></i> CARGAR PRECIO AL QR');
+                        }
+                    });
+
+                    if(intervaloMP) clearInterval(intervaloMP);
+                    intervaloMP = setInterval(function() {
+                        $.getJSON('acciones/verificar_pago_mp.php', { referencia: ref }, function(statusRes) {
+                            if(statusRes.estado === 'pagado') {
+                                clearInterval(intervaloMP);
+                                Swal.close();
+                                $('#metodo-pago').val('mercadopago');
+                                $('#btn-finalizar').removeClass('d-none').click(); 
+                            }
+                        });
+                    }, 3000);
+                } else {
+                    btn.prop('disabled', false).html('<i class="bi bi-cloud-upload"></i> CARGAR PRECIO AL QR');
+                    Swal.fire('Error', res.msg, 'error');
+                }
+            }, 'json');
+        }
+        
     </script>
 <div class="modal fade" id="modalClienteRapido" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">
@@ -1154,6 +1224,43 @@ function enviarMontoAMercadoPago() {
         </div>
     </div>
 </div>
-
+<div class="modal fade" id="modalPesable" tabindex="-1" data-bs-backdrop="static">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content border-0">
+      <div class="modal-header bg-success text-white">
+        <h5 class="modal-title fw-bold">⚖️ Pesar: <span id="nombreProdPesable"></span></h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-4">
+        <input type="hidden" id="idProdPesable">
+        <input type="hidden" id="precioKgPesable">
+        <div class="mb-3">
+            <label class="form-label fw-bold small text-muted">Unidad de Medida</label>
+            <select class="form-select form-select-lg" id="unidadMedidaPesable">
+                <option value="kg">Kilos (Ej: 1.250)</option>
+                <option value="gr">Gramos (Ej: 250)</option>
+            </select>
+        </div>
+        <div class="mb-3">
+            <label class="form-label fw-bold small text-muted">Peso en Balanza</label>
+            <input type="number" step="0.001" class="form-control form-control-lg text-center fw-bold text-success" id="inputPesoManual" placeholder="0.000" style="font-size: 2rem;">
+        </div>
+        <div class="row mb-3">
+            <div class="col-6">
+                <label class="form-label fw-bold small text-muted">Descontar Tara (Kg)</label>
+                <input type="number" step="0.001" class="form-control" id="inputTaraManual" value="0.000">
+            </div>
+            <div class="col-6 text-end">
+                <label class="form-label fw-bold small text-muted">Total a Cobrar</label>
+                <h3 id="totalCalculadoPesable" class="text-dark fw-bold m-0">$0.00</h3>
+            </div>
+        </div>
+        <button type="button" class="btn btn-success btn-lg w-100 fw-bold shadow" id="btnAgregarPesableCarrito">
+            <i class="bi bi-cart-plus"></i> AGREGAR A LA VENTA
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <?php require_once 'includes/layout_footer.php'; ?>

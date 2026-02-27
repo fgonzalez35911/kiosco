@@ -19,7 +19,7 @@ $venta = $stmt->fetch(PDO::FETCH_ASSOC);
 if(!$venta) die("Venta no encontrada");
 
 // 2. DETALLES PRODUCTOS
-$stmtDet = $conexion->prepare("SELECT d.*, p.descripcion, p.precio_venta as precio_regular
+$stmtDet = $conexion->prepare("SELECT d.*, p.descripcion, p.precio_venta as precio_regular, p.tipo
                               FROM detalle_ventas d 
                               JOIN productos p ON d.id_producto = p.id 
                               WHERE d.id_venta = ?");
@@ -135,7 +135,15 @@ $ahorro_final_cliente = $ahorro_total + $saldo_favor_usado + $ahorro_ofertas;
             <tbody>
                 <?php foreach($detalles as $d): ?>
                 <tr>
-                    <td class="cantidad"><?php echo floatval($d['cantidad']); ?></td>
+                    <td class="cantidad">
+                        <?php 
+                        if(isset($d['tipo']) && $d['tipo'] === 'pesable') {
+                            echo number_format($d['cantidad'], 3, ',', '.') . '<br><span style="font-size:8px;">Kg</span>';
+                        } else {
+                            echo floatval($d['cantidad']);
+                        }
+                        ?>
+                    </td>
                     <td>
     <?php echo htmlspecialchars(substr($d['descripcion'], 0, 20)); ?>
     <?php // CAMBIO: Corregimos a precio_historico para que solo tache si el precio cobrado es menor al regular ?>

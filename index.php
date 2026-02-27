@@ -14,6 +14,13 @@ $conf = $conexion->query("SELECT nombre_negocio, logo_url FROM configuracion WHE
 $nombre_negocio = $conf['nombre_negocio'] ?? 'Kiosco Manager';
 $logo_db = $conf['logo_url'] ?? 'img/logo.png';
 
+// 2. GENERAR URL ABSOLUTA DINÁMICA PARA WHATSAPP
+$protocolo = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off' || $_SERVER['SERVER_PORT'] == 443) ? "https://" : "http://";
+$dominio = $_SERVER['HTTP_HOST'];
+$ruta_base = rtrim(dirname($_SERVER['PHP_SELF']), '/\\');
+$url_base = $protocolo . $dominio . $ruta_base . '/';
+$logo_absoluto = $url_base . ltrim($logo_db, '/');
+
 $error = '';
 if (isset($_GET['error'])) {
     if ($_GET['error'] == 'vacios') $error = "⚠️ Completa todos los campos";
@@ -26,6 +33,13 @@ if (isset($_GET['error'])) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <meta property="og:title" content="Control de Acceso - <?php echo htmlspecialchars($nombre_negocio); ?>">
+    <meta property="og:description" content="Sistema de Gestión Integral y Punto de Venta">
+    <meta property="og:image" content="<?php echo $logo_absoluto; ?>">
+    <meta property="og:url" content="<?php echo $url_base; ?>">
+    <meta property="og:type" content="website">
+
     <title>Control de Acceso | <?php echo htmlspecialchars($nombre_negocio); ?></title>
     
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">

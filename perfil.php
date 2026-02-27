@@ -65,10 +65,10 @@ if (!empty($u['foto_perfil'])) {
     elseif (file_exists("img/usuarios/" . $u['foto_perfil'])) $foto_url = "img/usuarios/" . $u['foto_perfil'];
 }
 
-// Lógica de Firma original
-$ruta_firma = ($u['id_rol'] <= 2) ? "img/firmas/firma_admin.png" : "img/firmas/usuario_{$id_usuario}.png";
+// Lógica de Firma Aisalda y Anti-Caché Fuerte
+$ruta_firma = "img/firmas/usuario_{$id_usuario}.png";
 $tiene_firma = file_exists($ruta_firma);
-$firma_img = $tiene_firma ? $ruta_firma . "?t=" . time() : "";
+$firma_img = $tiene_firma ? $ruta_firma . "?v=" . time() . rand(1000,9999) : "";
 
 // KPIs para los widgets (Ventas mes y Movimientos hoy)
 $mis_ventas_mes = $conexion->query("SELECT SUM(total) FROM ventas WHERE id_usuario = $id_usuario AND MONTH(fecha) = MONTH(CURRENT_DATE()) AND estado = 'completada'")->fetchColumn() ?: 0;

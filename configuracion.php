@@ -13,8 +13,13 @@ if (!isset($_SESSION['usuario_id'])) { header("Location: index.php"); exit; }
 
 // --- 1. PROCESAR GUARDADO CONFIGURACIÓN GENERAL ---
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['guardar_general'])) {
-    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
-        die("Error de seguridad: Solicitud no autorizada.");
+    if (!$es_admin) {
+        if (isset($_POST['nombre_negocio']) && !in_array('conf_datos_negocio', $permisos)) die("Sin permiso para datos del negocio.");
+        if (isset($_POST['modulo_clientes']) && !in_array('conf_modulos', $permisos)) die("Sin permiso para módulos.");
+        if (isset($_POST['stock_global_valor']) && !in_array('conf_alerta_stock', $permisos)) die("Sin permiso para alertas de stock.");
+        if (isset($_POST['ticket_modo']) && !in_array('conf_comprobante', $permisos)) die("Sin permiso para modo comprobante.");
+        if (isset($_POST['redondeo_auto']) && !in_array('conf_caja', $permisos)) die("Sin permiso para ajustes de caja.");
+        if (isset($_POST['mp_access_token']) && !in_array('conf_mercadopago', $permisos)) die("Sin permiso para Mercado Pago.");
     }
 
     try {
@@ -40,6 +45,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['guardar_general'])) {
             'stock_global_valor' => intval($_POST['stock_global_valor'] ?? 5),
             'ticket_modo' => $_POST['ticket_modo'] ?? 'afip',
             'redondeo_auto' => isset($_POST['redondeo_auto']) ? 1 : 0,
+            'metodo_transferencia' => $_POST['metodo_transferencia'] ?? 'manual',
             'mp_access_token' => trim($_POST['mp_access_token'] ?? ''),
             'mp_user_id' => trim($_POST['mp_user_id'] ?? ''),
             'mp_pos_id' => trim($_POST['mp_pos_id'] ?? '')
@@ -60,7 +66,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['guardar_general'])) {
             'color_barra_nav' => 'Color', 'modulo_clientes' => 'Mod. Clientes', 'modulo_stock' => 'Mod. Stock',
             'modulo_reportes' => 'Mod. Reportes', 'modulo_fidelizacion' => 'Mod. Puntos',
             'stock_use_global' => 'Uso Stock Global', 'stock_global_valor' => 'Valor Stock Global',
-            'ticket_modo' => 'Modo Ticket', 'redondeo_auto' => 'Redondeo Auto',
+            'ticket_modo' => 'Modo Ticket', 'redondeo_auto' => 'Redondeo Auto', 'metodo_transferencia' => 'Recepción Transferencias',
             'mp_access_token' => 'MP Token', 'mp_user_id' => 'MP UserID', 'mp_pos_id' => 'MP POS'
         ];
 
@@ -78,14 +84,14 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['guardar_general'])) {
                 nombre_negocio=?, direccion_local=?, telefono_whatsapp=?, whatsapp_pedidos=?, cuit=?, mensaje_ticket=?, 
                 modulo_clientes=?, modulo_stock=?, modulo_reportes=?, modulo_fidelizacion=?, logo_url=?,
                 dias_alerta_vencimiento=?, dinero_por_punto=?,
-                stock_use_global=?, stock_global_valor=?, ticket_modo=?, redondeo_auto=?,
+                stock_use_global=?, stock_global_valor=?, ticket_modo=?, redondeo_auto=?, metodo_transferencia=?,
                 color_barra_nav=?, mp_access_token=?, mp_user_id=?, mp_pos_id=? WHERE id=1";
 
         $conexion->prepare($sql)->execute([
             $n['nombre_negocio'], $n['direccion_local'], $n['telefono_whatsapp'], $n['whatsapp_pedidos'], $n['cuit'], $n['mensaje_ticket'],
             $n['modulo_clientes'], $n['modulo_stock'], $n['modulo_reportes'], $n['modulo_fidelizacion'], $logo_url,
             $n['dias_alerta_vencimiento'], $n['dinero_por_punto'],
-            $n['stock_use_global'], $n['stock_global_valor'], $n['ticket_modo'], $n['redondeo_auto'],
+            $n['stock_use_global'], $n['stock_global_valor'], $n['ticket_modo'], $n['redondeo_auto'], $n['metodo_transferencia'],
             $n['color_barra_nav'], $n['mp_access_token'], $n['mp_user_id'], $n['mp_pos_id']
         ]);
 
@@ -108,15 +114,26 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['guardar_general'])) {
     } catch (Exception $e) { die("Error: " . $e->getMessage()); }
 }
 
-// --- 2. PROCESAR GUARDADO AFIP ---
+// --- 2. PROCESAR GUARDADO AFIP (AHORA CON AUDITORÍA INTELIGENTE) ---
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['guardar_afip'])) {
+    if (!$es_admin && !in_array('conf_afip', $permisos)) die("Sin permiso para configuración AFIP.");
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         die("Error de seguridad: Solicitud no autorizada.");
     }
 
+    // 1. Obtener datos viejos para comparar
+    $stmtOldAfip = $conexion->query("SELECT cuit, punto_venta, modo FROM afip_config WHERE id=1");
+    $oldAfip = $stmtOldAfip->fetch(PDO::FETCH_ASSOC);
+
     $cuit_afip = trim($_POST['cuit_afip']);
     $pto_vta = intval($_POST['punto_venta']);
     $modo = $_POST['modo_afip'];
+    
+    // 2. Detección exhaustiva de cambios
+    $cambiosAfip = [];
+    if($oldAfip['cuit'] != $cuit_afip) $cambiosAfip[] = "CUIT: " . ($oldAfip['cuit'] ?: 'S/N') . " -> " . $cuit_afip;
+    if($oldAfip['punto_venta'] != $pto_vta) $cambiosAfip[] = "Pto Vta: " . ($oldAfip['punto_venta'] ?: '0') . " -> " . $pto_vta;
+    if($oldAfip['modo'] != $modo) $cambiosAfip[] = "Modo: " . strtoupper($oldAfip['modo'] ?: 'N/A') . " -> " . strtoupper($modo);
 
     if (isset($_FILES['cert_crt']) && $_FILES['cert_crt']['error'] === UPLOAD_ERR_OK) {
         if(pathinfo($_FILES['cert_crt']['name'], PATHINFO_EXTENSION) == 'crt') {
@@ -124,6 +141,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['guardar_afip'])) {
             if(!is_dir('afip')) mkdir('afip');
             move_uploaded_file($_FILES['cert_crt']['tmp_name'], $ruta_crt);
             $conexion->prepare("UPDATE afip_config SET certificado_crt = ? WHERE id=1")->execute([$ruta_crt]);
+            $cambiosAfip[] = "Certificado (.crt) Actualizado";
         }
     }
 
@@ -133,17 +151,22 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['guardar_afip'])) {
             if(!is_dir('afip')) mkdir('afip');
             move_uploaded_file($_FILES['cert_key']['tmp_name'], $ruta_key);
             $conexion->prepare("UPDATE afip_config SET clave_key = ? WHERE id=1")->execute([$ruta_key]);
+            $cambiosAfip[] = "Clave (.key) Actualizada";
         }
     }
 
     try {
+        // 3. Ejecutar Update
         $conexion->prepare("UPDATE afip_config SET cuit=?, punto_venta=?, modo=? WHERE id=1")->execute([$cuit_afip, $pto_vta, $modo]);
+        // Resetear tokens al cambiar credenciales
         $conexion->query("UPDATE afip_config SET token=NULL, sign=NULL WHERE id=1");
 
-        // AUDITORÍA: CONFIGURACIÓN AFIP
-        $detalles_audit = "Actualización de parámetros AFIP. CUIT: " . $cuit_afip . " | Pto Vta: " . $pto_vta . " | Modo: " . strtoupper($modo);
-        $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'CONFIG_AFIP', ?, NOW())")
-                 ->execute([$_SESSION['usuario_id'], $detalles_audit]);
+        // 4. REGISTRO EN AUDITORÍA INTELIGENTE
+        if(!empty($cambiosAfip)) {
+            $detalles_audit = "Ajustes AFIP | " . implode(" | ", $cambiosAfip);
+            $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'CONFIG_AFIP', ?, NOW())")
+                     ->execute([$_SESSION['usuario_id'], $detalles_audit]);
+        }
 
         header("Location: configuracion.php?msg=afip_ok"); 
         exit;
@@ -156,13 +179,18 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['guardar_afip'])) {
 $conf = $conexion->query("SELECT * FROM configuracion LIMIT 1")->fetch(PDO::FETCH_ASSOC);
 $afip = $conexion->query("SELECT * FROM afip_config WHERE id=1")->fetch(PDO::FETCH_ASSOC);
 
-// Color por defecto si no existe en BD
-// Leemos la columna real de tu base de datos (color_barra_nav)
-$color_sistema = $conf['color_barra_nav'] ?? '#102A57';
+$color_sistema = '#102A57';
+try {
+    $resColor = $conexion->query("SELECT color_barra_nav FROM configuracion WHERE id=1");
+    if ($resColor) {
+        $dataC = $resColor->fetch(PDO::FETCH_ASSOC);
+        if (isset($dataC['color_barra_nav'])) $color_sistema = $dataC['color_barra_nav'];
+    }
+} catch (Exception $e) { }
 
 include 'includes/layout_header.php'; ?></div>
 
-<div class="header-blue" style="background-color: <?php echo $color_sistema; ?> !important; padding: 40px 0; border-radius: 0;">
+<div class="header-blue" style="background: <?php echo $color_sistema; ?> !important; border-radius: 0 !important; width: 100vw; margin-left: calc(-50vw + 50%); padding: 40px 0; position: relative; overflow: hidden;">
     <i class="bi bi-gear bg-icon-large"></i>
     <div class="container position-relative">
         <div class="d-flex justify-content-between align-items-start mb-4">
@@ -320,6 +348,20 @@ include 'includes/layout_header.php'; ?></div>
                                         <label class="small ms-2">Redondeo automático en ventas</label>
                                     </div>
                                 </div>
+
+                                <div class="col-12"><hr><h6 class="fw-bold text-primary"><i class="bi bi-bank2"></i> Recepción de Transferencias (Alias / CVU)</h6></div>
+                                <div class="col-md-12 mb-2">
+                                    <div class="p-3 border rounded-3 bg-light">
+                                        <label class="small fw-bold mb-2">¿Cómo querés validar las transferencias manuales de tus clientes?</label>
+                                        <select name="metodo_transferencia" class="form-select border-primary fw-bold text-primary">
+                                            <option value="manual" <?php echo (!isset($conf['metodo_transferencia']) || $conf['metodo_transferencia']=='manual')?'selected':''; ?>>👁️ Validación Manual (Miro mi celular y confirmo en caja)</option>
+                                            <option value="ocr" <?php echo ($conf['metodo_transferencia']=='ocr')?'selected':''; ?>>📷 Escáner de Pantalla Inteligente (Con IA y resguardo de foto)</option>
+                                            <option value="webhook" disabled>📱 Celular Esclavo (100% Automático) [EN DESARROLLO]</option>
+                                        </select>
+                                        <small class="text-muted d-block mt-2"><i class="bi bi-info-circle"></i> El "Escáner de Pantalla" abrirá la cámara de la caja para fotografiar y leer el comprobante del cliente automáticamente.</small>
+                                    </div>
+                                </div>
+
                                 <div class="col-12"><hr><h6 class="fw-bold"><i class="bi bi-qr-code"></i> Configuración Mercado Pago (QR Dinámico)</h6></div>
                                 <div class="col-md-6">
                                     <label class="small fw-bold">Access Token (Producción)</label>
