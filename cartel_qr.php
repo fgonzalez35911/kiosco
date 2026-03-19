@@ -80,7 +80,7 @@ $whatsapp = $conf['telefono_whatsapp'] ?? '';
     .titulo-xxl span { color: var(--azul-10); }
     .sub-text { font-size: 1.5rem; color: #555; font-weight: 700; margin-top: 5px; }
 
-    .arrow-box { color: var(--rojo-oferta); font-size: 3rem; margin-bottom: -15px; animation: bounce 2s infinite; }
+    .arrow-box { color: var(--rojo-oferta); font-size: 4rem; margin-bottom: -5px; animation: bounce 2s infinite; }
 
     .qr-container-relative { position: relative; display: inline-block; }
     .qr-frame {
@@ -90,7 +90,7 @@ $whatsapp = $conf['telefono_whatsapp'] ?? '';
     .qr-img { width: 230px; height: 230px; display: block; }
 
     .badge-free {
-        position: absolute; top: -15px; right: -25px;
+        position: absolute; top: -20px; right: -70px;
         background: var(--rojo-oferta); color: white;
         font-weight: 900; font-size: 1.2rem;
         padding: 5px 15px; transform: rotate(15deg);
@@ -176,7 +176,7 @@ $whatsapp = $conf['telefono_whatsapp'] ?? '';
             </div>
 
             <div class="promo-text">
-                <div class="titulo-xxl">¡UNITE AL<br><span>CLUB DEL 10!</span></div>
+                <div class="titulo-xxl">¡UNITE AL<br><span>NUESTRO CLUB</span></div>
                 <div class="sub-text">
                     <i class="bi bi-gift-fill text-danger"></i> Y empezá a recibir premios exclusivos
                 </div>

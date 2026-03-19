@@ -62,6 +62,10 @@ $cont = (!empty($num)) ? $pref . $num : '';
             $sql = "INSERT INTO encuestas (nivel, comentario, cliente_nombre, contacto, fecha) VALUES (?, ?, ?, ?, NOW())";
             $stmt = $conexion->prepare($sql);
             $stmt->execute([$nivel, $com, $nom, $cont]);
+            try {
+                $detalles_audit = "Nueva encuesta recibida. Cliente: " . $nom . " | Calificación: " . $nivel . " estrellas";
+                $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (1, 'ENCUESTA', ?, NOW())")->execute([$detalles_audit]);
+            } catch (Exception $e) {}
             header("Location: encuesta.php?exito=1"); exit;
         } catch (Exception $e) {
             $mensaje_sweet = "Swal.fire('Error', 'Problema al guardar.', 'error');";
@@ -143,7 +147,8 @@ if ($esAdmin) {
 
     <?php if($esAdmin): ?>
         <?php include 'includes/layout_header.php'; ?>
-        <div class="header-blue">
+        <div class="header-blue" style="background: <?php echo $color_sistema; ?> !important; border-radius: 0 !important; width: 100vw; margin-left: calc(-50vw + 50%); padding: 40px 0; position: relative; overflow: hidden;">
+
             <i class="bi bi-chat-text-fill bg-icon-large"></i>
             <div class="container position-relative">
                 <div class="d-flex justify-content-between align-items-center mb-4">

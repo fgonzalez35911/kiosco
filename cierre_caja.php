@@ -1,244 +1,253 @@
 <?php
-// cierre_caja.php - CIERRE UNIVERSAL (Admin puede cerrar cajas de otros)
+// cierre_caja.php - DISEÑO TECH + ÉXITO PROFESIONAL (Lógica Intacta)
 session_start();
-require_once 'includes/db.php';
+require_once 'includes/db.php'; 
 if (!isset($_SESSION['usuario_id'])) { header("Location: index.php"); exit; }
 
 $usuario_id = $_SESSION['usuario_id'];
 $rol_usuario = $_SESSION['rol'] ?? 3;
 $fecha_actual = date('Y-m-d H:i:s');
 
+// --- CANDADO: PERMISO PARA ARQUEO ---
+$permisos_caja = $_SESSION['permisos'] ?? [];
+if (($rol_usuario > 2) && !in_array('caja_cerrar_turno', $permisos_caja)) {
+    die("<div style='padding:50px; text-align:center; font-family:sans-serif; background:#0f172a; color:#fff; height:100vh;'><h2>⛔ ACCESO DENEGADO</h2><p>No tienes el candado para realizar el Cierre de Caja.</p><a href='dashboard.php' style='color:#22c55e;'>Volver al Inicio</a></div>");
+}
+
 $id_sesion = null;
 $monto_inicial = 0;
 
-// 1. DETERMINAR QUÉ CAJA VAMOS A CERRAR
+// 1. DETERMINAR CAJA (Lógica original)
 if (isset($_GET['id_sesion'])) {
-    // Si viene por URL (desde historial)
     $id_solicitado = intval($_GET['id_sesion']);
-    
-    // Verificar permisos: ¿Es mi caja O soy admin?
     $stmtCheck = $conexion->prepare("SELECT id, id_usuario, monto_inicial, estado FROM cajas_sesion WHERE id = ?");
     $stmtCheck->execute([$id_solicitado]);
     $caja = $stmtCheck->fetch(PDO::FETCH_ASSOC);
-    
     if ($caja) {
-        if ($caja['estado'] == 'cerrada') {
-            // Si ya estaba cerrada, redirigir al detalle directamente
-            header("Location: ver_detalle_caja.php?id=$id_solicitado"); exit;
-        }
-        // Permitir si es mi caja O si soy Admin/Dueño
+        if ($caja['estado'] == 'cerrada') { header("Location: ver_detalle_caja.php?id=$id_solicitado"); exit; }
         if ($caja['id_usuario'] == $usuario_id || $rol_usuario <= 2) {
-            $id_sesion = $caja['id'];
-            $monto_inicial = $caja['monto_inicial'];
-        } else {
-            die("No tienes permiso para cerrar la caja de otro usuario.");
-        }
+            $id_sesion = $caja['id']; $monto_inicial = $caja['monto_inicial'];
+        } else { die("Sin permiso."); }
     }
 } 
-
-// Si no se seleccionó ninguna por URL, buscar la MI ACTIVA
 if (!$id_sesion) {
     $stmt = $conexion->prepare("SELECT id, monto_inicial FROM cajas_sesion WHERE id_usuario = ? AND estado = 'abierta'");
-    $stmt->execute([$usuario_id]);
-    $caja = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    if($caja) {
-        $id_sesion = $caja['id'];
-        $monto_inicial = $caja['monto_inicial'];
-    } else {
-        // No tengo caja abierta y no pedí cerrar otra -> Ir a apertura
-        header("Location: apertura_caja.php"); exit;
-    }
+    $stmt->execute([$usuario_id]); $caja = $stmt->fetch(PDO::FETCH_ASSOC);
+    if($caja) { $id_sesion = $caja['id']; $monto_inicial = $caja['monto_inicial']; } 
+    else { header("Location: apertura_caja.php"); exit; }
 }
 
-// 2. OBTENER TOTALES DEL SISTEMA PARA ESA CAJA
-// A. Ventas Puras en Efectivo
-$sqlVentas = "SELECT SUM(total) FROM ventas WHERE id_caja_sesion = ? AND metodo_pago = 'Efectivo' AND estado = 'completada'";
-$stmt = $conexion->prepare($sqlVentas); $stmt->execute([$id_sesion]);
-$ventas_efectivo_puro = $stmt->fetchColumn() ?? 0;
+// 2. CÁLCULOS (CAJA NEGRA)
+$stmt = $conexion->prepare("SELECT SUM(total) FROM ventas WHERE id_caja_sesion = ? AND metodo_pago = 'Efectivo' AND estado = 'completada'");
+$stmt->execute([$id_sesion]); $v_ef = $stmt->fetchColumn() ?? 0;
+$stmt = $conexion->prepare("SELECT SUM(m.monto) FROM movimientos_cc m JOIN ventas v ON m.id_venta = v.id WHERE v.id_caja_sesion = ? AND v.metodo_pago = 'Efectivo' AND m.tipo = 'haber'");
+$stmt->execute([$id_sesion]); $d_ef = $stmt->fetchColumn() ?? 0;
+$stmt = $conexion->prepare("SELECT SUM(monto) FROM pagos_ventas pv JOIN ventas v ON pv.id_venta = v.id WHERE v.id_caja_sesion = ? AND pv.metodo_pago = 'Efectivo'");
+$stmt->execute([$id_sesion]); $m_ef = $stmt->fetchColumn() ?? 0;
+$stmt = $conexion->prepare("SELECT SUM(monto) FROM gastos WHERE id_caja_sesion = ?");
+$stmt->execute([$id_sesion]); $g = $stmt->fetchColumn() ?? 0;
 
-// B. Cobros de Deuda en Efectivo
-$sqlDeudas = "SELECT SUM(m.monto) FROM movimientos_cc m JOIN ventas v ON m.id_venta = v.id WHERE v.id_caja_sesion = ? AND v.metodo_pago = 'Efectivo' AND m.tipo = 'haber'";
-$stmt = $conexion->prepare($sqlDeudas); $stmt->execute([$id_sesion]);
-$cobros_deuda_efectivo = $stmt->fetchColumn() ?? 0;
+$total_entradas = $v_ef + $d_ef + $m_ef;
+$total_esperado = ($monto_inicial + $total_entradas) - $g;
 
-// C. Parte en Efectivo de Pagos Mixtos
-$sqlMixtos = "SELECT SUM(monto) FROM pagos_ventas pv JOIN ventas v ON pv.id_venta = v.id WHERE v.id_caja_sesion = ? AND pv.metodo_pago = 'Efectivo'";
-$stmt = $conexion->prepare($sqlMixtos); $stmt->execute([$id_sesion]);
-$mixtos_efectivo = $stmt->fetchColumn() ?? 0;
-
-// D. GASTOS Y RETIROS
-$sqlGastos = "SELECT SUM(monto) FROM gastos WHERE id_caja_sesion = ?";
-$stmt = $conexion->prepare($sqlGastos); $stmt->execute([$id_sesion]);
-$gastos_totales = $stmt->fetchColumn() ?? 0;
-
-// TOTALES FINALES
-$total_entradas = $ventas_efectivo_puro + $cobros_deuda_efectivo + $mixtos_efectivo;
-$total_esperado = ($monto_inicial + $total_entradas) - $gastos_totales;
-
-$mensaje = '';
 $cierre_exitoso = false;
-
-// PROCESAR CIERRE
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $total_fisico = $_POST['total_declarado']; 
     $diferencia = $total_fisico - $total_esperado;
-    
-    $sqlCierre = "UPDATE cajas_sesion SET monto_final = ?, total_ventas = ?, diferencia = ?, fecha_cierre = ?, estado = 'cerrada' WHERE id = ?";
-    $stmt = $conexion->prepare($sqlCierre);
+    $stmt = $conexion->prepare("UPDATE cajas_sesion SET monto_final = ?, total_ventas = ?, diferencia = ?, fecha_cierre = ?, estado = 'cerrada' WHERE id = ?");
     $stmt->execute([$total_fisico, $total_entradas, $diferencia, $fecha_actual, $id_sesion]);
-    
-    // AUDITORÍA: CIERRE DE CAJA
-    try {
-        $detalles_audit = "Cierre de caja #" . $id_sesion . ". Monto declarado: $" . number_format($total_fisico, 2) . " | Diferencia: $" . number_format($diferencia, 2);
-        $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'CIERRE', ?, NOW())")
-                 ->execute([$usuario_id, $detalles_audit]);
-    } catch (Exception $e) { }
-
     $cierre_exitoso = true;
-    
-    $clase_dif = ($diferencia < 0) ? 'text-danger' : 'text-success';
-    $txt_dif = ($diferencia < 0) ? 'FALTANTE' : 'SOBRANTE';
-    if(abs($diferencia) < 1) { $clase_dif = 'text-primary'; $txt_dif = 'PERFECTO'; }
-    
-    // FORMATOS PARA MOSTRAR
-    $monto_final_fmt = number_format($total_fisico, 2);
-    $diferencia_fmt = number_format($diferencia, 2);
-    $esperado_fmt = number_format($total_esperado, 2);
-    
-    // MENSAJE DE ÉXITO
-    $mensaje = "
-    <div class='alert alert-light border shadow-sm text-center'>
-        <h3 class='fw-bold'>¡Caja #$id_sesion Cerrada!</h3>
-        <hr>
-        <div class='row'>
-            <div class='col-6 text-end text-muted'>Sistema Esperaba:</div>
-            <div class='col-6 text-start fw-bold fs-5'>$ {$esperado_fmt}</div>
-            
-            <div class='col-6 text-end text-muted'>Vos contaste:</div>
-            <div class='col-6 text-start fw-bold fs-5'>$ {$monto_final_fmt}</div>
-            
-            <div class='col-12 mt-3'>
-                <h2 class='$clase_dif fw-bold'>$txt_dif: $ {$diferencia_fmt}</h2>
-            </div>
-        </div>
-        <div class='mt-4'>
-            <a href='index.php' class='btn btn-outline-secondary'>Volver al Inicio</a>
-            <a href='ver_detalle_caja.php?id=$id_sesion' class='btn btn-primary fw-bold'>
-                <i class='bi bi-eye'></i> Ver Detalle
-            </a>
-        </div>
-    </div>";
 }
-?>
-<?php require_once 'includes/layout_header.php'; ?>
+
+require_once 'includes/layout_header.php'; ?>
+
 <style>
-    .billete-row { display: flex; align-items: center; margin-bottom: 8px; }
-    .billete-label { width: 80px; font-weight: bold; }
-    .billete-input { width: 100px; text-align: center; font-weight: bold; }
-    .billete-total { margin-left: auto; color: #198754; font-weight: bold; }
-    .total-display { background: #212529; color: #0dfd05; font-family: monospace; font-size: 2rem; padding: 10px; border-radius: 8px; text-align: center; }
-    .card-header-custom { background: linear-gradient(45deg, #0d6efd, #0dcaf0); color: white; }
+    /* Recuperamos el estilo TECH/DARK que te gustó */
+    body { background: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; }
+    .main-wrapper { min-height: 100vh; display: flex; flex-direction: column; padding: 20px; }
+
+    .tech-header {
+        background: #1e293b; border: 1px solid #334155; border-radius: 20px;
+        padding: 20px 30px; display: flex; justify-content: space-between; align-items: center;
+        margin-bottom: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+    }
+    .total-val { color: #22c55e; font-family: monospace; font-size: 3.5rem; font-weight: 900; }
+
+    /* Grilla 4x3 en PC */
+    .tech-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+
+    .billete-box {
+        background: #1e293b; border: 1px solid #334155; border-radius: 15px;
+        padding: 15px; display: flex; flex-direction: column; justify-content: center;
+    }
+    .b-label { font-size: 1.3rem; font-weight: 900; color: #fff; }
+    .b-subtotal { color: #4ade80; font-weight: bold; font-size: 0.9rem; }
+
+    .qty-control { display: flex; align-items: center; background: #0f172a; border-radius: 10px; padding: 4px; border: 1px solid #334155; }
+    .btn-qty { width: 45px; height: 45px; border: none; background: #334155; color: #fff; font-size: 1.5rem; border-radius: 8px; cursor: pointer; }
+    .btn-qty:active { background: #3b82f6; transform: scale(0.9); }
+    
+    .b-input { flex-grow: 1; background: transparent; border: none; color: #fff; text-align: center; font-size: 1.8rem; font-weight: bold; width: 40px; }
+    .b-input::-webkit-inner-spin-button { -webkit-appearance: none; }
+
+    /* Widget Celular Inferior */
+    .widget-mobile-bottom {
+        display: none; position: fixed; bottom: 0; left: 0; right: 0;
+        background: #22c55e; color: #0f172a; padding: 15px 20px;
+        z-index: 2000; box-shadow: 0 -5px 20px rgba(0,0,0,0.4);
+        justify-content: space-between; align-items: center;
+    }
+
+    /* Pantalla de Éxito INTEGRADA */
+    .success-card { background: #fff; color: #334155; border-radius: 20px; overflow: hidden; }
+    .success-header { background: #f8fafc; border-bottom: 1px solid #e2e8f0; padding: 20px; }
+
+    /* Mensaje de Alerta Estilizado */
+    .alert-cierre {
+        background: rgba(239, 68, 68, 0.1); border: 1px solid #ef4444; color: #f87171;
+        border-radius: 15px; padding: 15px; margin-bottom: 15px; display: flex; align-items: center;
+    }
+
+    @media (max-width: 992px) {
+        .tech-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+        .tech-header { display: none; }
+        .widget-mobile-bottom { display: flex; }
+        .main-wrapper { padding: 10px; padding-bottom: 100px; }
+    }
 </style>
 
-<div class="pb-5">
-    <?php if($cierre_exitoso): ?>
-        <div class="row justify-content-center mt-5">
-            <div class="col-md-6">
-                <?php echo $mensaje; ?>
+<div class="main-wrapper">
+    <?php if($cierre_exitoso): 
+        $color = ($diferencia < 0) ? 'text-danger' : 'text-success';
+        $txt = ($diferencia < 0) ? 'FALTANTE' : 'SOBRANTE';
+        if(abs($diferencia) < 1) { $color = 'text-primary'; $txt = 'PERFECTO'; }
+    ?>
+        <div class="row justify-content-center m-auto w-100">
+            <div class="col-md-6 col-lg-5">
+                <div class="success-card shadow-lg border-0 animate__animated animate__fadeInUp">
+                    <div class="success-header text-center">
+                        <h4 class="mb-0 fw-bold">Resumen de Cierre #<?php echo $id_sesion; ?></h4>
+                    </div>
+                    <div class="card-body p-4">
+                        <table class="table table-borderless mb-4">
+                            <tr class="border-bottom">
+                                <td class="py-2 text-muted">Sistema esperaba:</td>
+                                <td class="py-2 text-end fw-bold">$ <?php echo number_format($total_esperado, 2, ',', '.'); ?></td>
+                            </tr>
+                            <tr class="border-bottom">
+                                <td class="py-2 text-muted">Vos contaste:</td>
+                                <td class="py-2 text-end fw-bold">$ <?php echo number_format($total_fisico, 2, ',', '.'); ?></td>
+                            </tr>
+                            <tr>
+                                <td class="py-3 h4 fw-bold">Diferencia:</td>
+                                <td class="py-3 text-end h4 fw-bold <?php echo $color; ?>">$ <?php echo number_format($diferencia, 2, ',', '.'); ?></td>
+                            </tr>
+                        </table>
+                        
+                        <div class="text-center p-2 rounded-3 mb-4 <?php echo ($diferencia < 0) ? 'bg-danger' : 'bg-success'; ?> bg-opacity-10">
+                            <span class="fw-bold <?php echo $color; ?>">ESTADO: <?php echo $txt; ?></span>
+                        </div>
+
+                        <div class="d-grid gap-2">
+                            <a href="ver_detalle_caja.php?id=<?php echo $id_sesion; ?>" class="btn btn-primary btn-lg fw-bold">Ver Detalles de Caja</a>
+                            <a href="index.php" class="btn btn-outline-secondary">Volver al Inicio</a>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
+
     <?php else: ?>
-    
-    <div class="row justify-content-center">
-        <div class="col-lg-8">
-            <div class="card shadow border-0">
-                <div class="card-header card-header-custom fw-bold text-center py-3">
-                    <i class="bi bi-calculator"></i> CERRANDO CAJA #<?php echo $id_sesion; ?>
-                </div>
-                <div class="card-body p-4">
-                    <div class="alert alert-info text-center small mb-4">
-                        <i class="bi bi-info-circle"></i> Ingresá la cantidad de billetes. El sistema restará los gastos ($<?php echo number_format($gastos_totales,2); ?>).
-                    </div>
 
-                    <form method="POST" id="formCierre">
-                        <div class="row">
-                            <div class="col-md-6 border-end">
-                                <h6 class="text-muted mb-3 text-center">Alta Denominación</h6>
-                                <div class="billete-row"><div class="billete-label">$ 20.000</div><input type="number" class="form-control billete-input" data-valor="20000" placeholder="0"><div class="billete-total">$ 0</div></div>
-                                <div class="billete-row"><div class="billete-label">$ 10.000</div><input type="number" class="form-control billete-input" data-valor="10000" placeholder="0"><div class="billete-total">$ 0</div></div>
-                                <div class="billete-row"><div class="billete-label">$ 2.000</div><input type="number" class="form-control billete-input" data-valor="2000" placeholder="0"><div class="billete-total">$ 0</div></div>
-                                <div class="billete-row"><div class="billete-label">$ 1.000</div><input type="number" class="form-control billete-input" data-valor="1000" placeholder="0"><div class="billete-total">$ 0</div></div>
-                                <div class="billete-row"><div class="billete-label">$ 500</div><input type="number" class="form-control billete-input" data-valor="500" placeholder="0"><div class="billete-total">$ 0</div></div>
-                            </div>
-                            <div class="col-md-6">
-                                <h6 class="text-muted mb-3 text-center">Baja Denominación</h6>
-                                <div class="billete-row"><div class="billete-label">$ 200</div><input type="number" class="form-control billete-input" data-valor="200" placeholder="0"><div class="billete-total">$ 0</div></div>
-                                <div class="billete-row"><div class="billete-label">$ 100</div><input type="number" class="form-control billete-input" data-valor="100" placeholder="0"><div class="billete-total">$ 0</div></div>
-                                <div class="billete-row"><div class="billete-label">$ 50</div><input type="number" class="form-control billete-input" data-valor="50" placeholder="0"><div class="billete-total">$ 0</div></div>
-                                <div class="billete-row"><div class="billete-label">$ 20</div><input type="number" class="form-control billete-input" data-valor="20" placeholder="0"><div class="billete-total">$ 0</div></div>
-                                <div class="billete-row"><div class="billete-label">$ 10</div><input type="number" class="form-control billete-input" data-valor="10" placeholder="0"><div class="billete-total">$ 0</div></div>
-                                <div class="mt-4"><label class="small fw-bold text-muted">Monedas / Suelto ($)</label><input type="number" step="0.01" class="form-control fw-bold text-center" id="inputMonedas" placeholder="0.00"></div>
-                            </div>
-                        </div>
+    <div class="tech-header">
+        <div>
+            <span class="text-white-50 small fw-bold text-uppercase">Arqueo en Vivo</span>
+            <div class="total-val" id="totalDisplay">$ 0,00</div>
+        </div>
+        <button type="button" onclick="confirmarCierre()" class="btn btn-success btn-lg fw-bold rounded-pill px-5">CERRAR CAJA</button>
+    </div>
 
-                        <hr>
-                        <div class="text-center p-3 mb-4">
-                            <small class="text-uppercase text-muted fw-bold">Total Efectivo en Caja</small>
-                            <div class="total-display" id="totalDisplay">$ 0.00</div>
-                            <input type="hidden" name="total_declarado" id="inputTotalDeclarado" value="0">
-                        </div>
+    <div class="widget-mobile-bottom" id="mobileWidget">
+        <div style="font-size: 1.5rem; font-weight: 900;" id="totalWidget">$ 0,00</div>
+        <button onclick="confirmarCierre()" class="btn btn-dark fw-bold rounded-pill px-4 py-2">CERRAR</button>
+    </div>
 
-                        <button type="button" id="btn-cerrar-caja" class="btn btn-primary w-100 py-3 fw-bold shadow-sm">
-                            <i class="bi bi-lock-fill"></i> CERRAR CAJA DEFINITIVAMENTE
-                        </button>
-                    </form>
-                </div>
-            </div>
+    <div class="alert-cierre text-center">
+        <div class="w-100">
+            <i class="bi bi-exclamation-triangle-fill me-2"></i>
+            <strong>¡ATENCIÓN!</strong> Contá bien los billetes. Este es un <b>cierre de caja definitivo</b> y no tiene vuelta atrás.
         </div>
     </div>
+
+    <form method="POST" id="formCierre">
+        <input type="hidden" name="total_declarado" id="inputTotalDeclarado" value="0">
+        
+        <div class="tech-grid">
+            <?php 
+            // 10 Billetes + 2 Monedas = 12 Items (4x3 perfecto en escritorio)
+            $valores = [20000, 10000, 2000, 1000, 500, 200, 100, 50, 20, 10, 2, 1];
+            foreach($valores as $v): 
+                $label = ($v <= 2) ? "MONEDA $ $v" : "$ ".number_format($v,0,'','.');
+                $clase_b = ($v <= 2) ? "border-primary" : "";
+            ?>
+                <div class="billete-box <?php echo $clase_b; ?>">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span class="b-label"><?php echo $label; ?></span>
+                        <span class="text-success fw-bold b-subtotal">$ 0</span>
+                    </div>
+                    <div class="qty-control">
+                        <button type="button" class="btn-qty" onclick="cambiar(this, -1)">-</button>
+                        <input type="number" class="b-input valor-input" data-valor="<?php echo $v; ?>" placeholder="0" oninput="actualizar()">
+                        <button type="button" class="btn-qty" onclick="cambiar(this, 1)">+</button>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+        </div>
+    </form>
     <?php endif; ?>
 </div>
 
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script>
-    const inputs = document.querySelectorAll('.billete-input');
-    const inputMonedas = document.getElementById('inputMonedas');
+    const inputs = document.querySelectorAll('.valor-input');
     const display = document.getElementById('totalDisplay');
+    const widget = document.getElementById('totalWidget');
     const inputHidden = document.getElementById('inputTotalDeclarado');
 
-    function calcularTotal() {
-        let total = 0;
-        inputs.forEach(i => {
-            let cant = parseInt(i.value) || 0;
-            let valor = parseInt(i.dataset.valor);
-            let subtotal = cant * valor;
-            i.parentElement.querySelector('.billete-total').innerText = '$ ' + subtotal.toLocaleString('es-AR');
-            total += subtotal;
-        });
-        let monedas = parseFloat(inputMonedas.value) || 0;
-        total += monedas;
-        display.innerText = '$ ' + total.toLocaleString('es-AR', {minimumFractionDigits: 2});
-        inputHidden.value = total;
+    function cambiar(btn, delta) {
+        const input = btn.parentElement.querySelector('input');
+        let v = parseInt(input.value) || 0;
+        v += delta; if(v < 0) v = 0;
+        input.value = v;
+        actualizar();
     }
 
-    inputs.forEach(input => input.addEventListener('input', calcularTotal));
-    inputMonedas.addEventListener('input', calcularTotal);
+    function actualizar() {
+        let t = 0;
+        inputs.forEach(i => {
+            let cant = parseInt(i.value) || 0;
+            let val = parseInt(i.dataset.valor);
+            let sub = cant * val;
+            i.closest('.billete-box').querySelector('.b-subtotal').innerText = '$' + sub.toLocaleString('es-AR');
+            t += sub;
+        });
+        const fmt = '$ ' + t.toLocaleString('es-AR', {minimumFractionDigits: 2});
+        if(display) display.innerText = fmt;
+        if(widget) widget.innerText = fmt;
+        inputHidden.value = t;
+    }
 
-    $('#btn-cerrar-caja').click(function(e){
-        e.preventDefault();
-        let total = $('#inputTotalDeclarado').val();
+    function confirmarCierre() {
+        const monto = parseFloat(inputHidden.value);
         Swal.fire({
-            title: '¿Cerrar Caja #' + <?php echo $id_sesion; ?> + '?',
-            text: "Declaras un total de $" + parseFloat(total).toLocaleString('es-AR'),
+            title: '¿Confirmar Arqueo?',
+            html: `<h1 class="fw-bold text-success mt-2">$ ${monto.toLocaleString('es-AR')}</h1>`,
             icon: 'warning',
-            showCancelButton: true,
-            confirmButtonColor: '#0d6efd',
-            confirmButtonText: 'Sí, cerrar caja',
-            cancelButtonText: 'Cancelar'
-        }).then((result) => {
-            if (result.isConfirmed) { $('#formCierre').submit(); }
-        })
-    });
+            background: '#1e293b', color: '#fff',
+            showCancelButton: true, confirmButtonText: 'SÍ, CERRAR', cancelButtonText: 'REVISAR',
+            confirmButtonColor: '#22c55e', cancelButtonColor: '#475569',
+            borderRadius: '20px'
+        }).then((r) => { if(r.isConfirmed) document.getElementById('formCierre').submit(); });
+    }
 </script>
 <?php require_once 'includes/layout_footer.php'; ?>

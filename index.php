@@ -60,7 +60,9 @@ if (isset($_GET['error'])) {
             background: linear-gradient(-45deg, #0a1931, #185adb, #102A57, #0a1931);
             background-size: 400% 400%;
             animation: gradientBG 15s ease infinite;
+            /* Usamos dvh para que en el celular ignore las barras del navegador */
             height: 100vh;
+            height: 100dvh; 
             display: flex;
             align-items: center;
             justify-content: center;
@@ -74,7 +76,6 @@ if (isset($_GET['error'])) {
             100% { background-position: 0% 50%; }
         }
 
-        /* Iconos de fondo */
         .bg-floating-icons i {
             position: absolute;
             color: rgba(0, 210, 255, 0.05);
@@ -95,12 +96,31 @@ if (isset($_GET['error'])) {
             backdrop-filter: blur(25px);
             border: 1px solid rgba(255, 255, 255, 0.1);
             border-radius: 40px;
-            padding: 3.5rem 3rem;
+            padding: 1.5rem; /* Reducido para móviles */
             box-shadow: 0 40px 100px rgba(0,0,0,0.5);
-            width: 100%;
+            width: 90%;
             max-width: 480px;
+            max-height: 90dvh; /* Asegura que no toque los bordes del celular */
             color: white;
             z-index: 10;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        /* Ajustes específicos para celulares */
+        @media (max-width: 768px) {
+            .logo-img { max-height: 100px !important; margin-bottom: 1rem !important; }
+            .admin-card h4 { margin-bottom: 1rem !important; font-size: 1.1rem; }
+            .input-group-custom { margin-bottom: 1rem !important; }
+            .footer-text { margin-top: 1rem !important; }
+            .btn-admin-pro { padding: 14px !important; }
+        }
+
+        @media (min-width: 768px) {
+            .admin-card {
+                padding: 3.5rem 3rem;
+            }
         }
 
         /* LOGO: Más grande y sin caja de fondo */
@@ -186,7 +206,7 @@ if (isset($_GET['error'])) {
             <img src="<?php echo htmlspecialchars($logo_db); ?>?v=<?php echo time(); ?>" alt="Logo" class="logo-img">
         </div>
 
-        <h4 class="fw-bold mb-4" style="letter-spacing: -0.5px; opacity: 0.9;">CONTROL GERENCIAL</h4>
+        <h4 class="fw-bold mb-4" style="letter-spacing: -0.5px; opacity: 0.9;">SISTEMA DE CONTROL</h4>
         
         <?php if($error): ?>
             <div class="alert alert-danger border-0 animate__animated animate__shakeX py-2 small fw-bold" style="background: rgba(255,0,0,0.2); color: #ffbaba; border-radius: 15px;">
@@ -219,7 +239,7 @@ if (isset($_GET['error'])) {
         </form>
         
         <div class="footer-text">
-            Terminal Segura &copy; <?php echo date('Y'); ?> <br>
+            Terminal Segura - Acceso Gerencial <br/> &copy; <?php echo date('Y'); ?>
             <b><?php echo htmlspecialchars($nombre_negocio); ?></b>
         </div>
     </div>

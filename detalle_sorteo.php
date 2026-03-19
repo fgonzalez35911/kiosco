@@ -5,7 +5,11 @@ require_once 'includes/db.php';
 
 if (!isset($_GET['id'])) { header("Location: sorteos.php"); exit; }
 $id = $_GET['id'];
-
+// --- DETECCIÓN DE CAJA (Necesaria para registrar la venta del ticket) ---
+$usuario_id = $_SESSION['usuario_id'];
+$stmtCaja = $conexion->prepare("SELECT id FROM cajas_sesion WHERE id_usuario = ? AND estado = 'abierta'");
+$stmtCaja->execute([$usuario_id]);
+$caja = $stmtCaja->fetch(PDO::FETCH_ASSOC);
 // 1. OBTENER DATOS DEL SORTEO
 $stmt = $conexion->prepare("SELECT * FROM sorteos WHERE id = ?");
 $stmt->execute([$id]); $sorteo = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -20,7 +24,7 @@ $premios = $conexion->query("SELECT sp.*, p.descripcion as prod_nombre, p.precio
     WHERE id_sorteo = $id ORDER BY posicion ASC")->fetchAll(PDO::FETCH_ASSOC);
 
 $tickets = $conexion->query("SELECT st.*, c.nombre, c.email, c.telefono FROM sorteo_tickets st JOIN clientes c ON st.id_cliente = c.id WHERE id_sorteo = $id ORDER BY numero_ticket ASC")->fetchAll(PDO::FETCH_ASSOC);
-$clientes = $conexion->query("SELECT id, nombre FROM clientes WHERE id != 1 ORDER BY nombre ASC")->fetchAll(PDO::FETCH_ASSOC);
+$clientes = $conexion->query("SELECT id, nombre, dni FROM clientes WHERE id != 1 ORDER BY nombre ASC")->fetchAll(PDO::FETCH_ASSOC);
 
 $sqlProds = "SELECT p.id, p.descripcion, p.precio_costo, p.tipo, p.codigo_barras,
             (SELECT COALESCE(SUM(prod_hijo.precio_costo * ci.cantidad), 0) FROM combo_items ci JOIN combos c ON c.id = ci.id_combo JOIN productos prod_hijo ON ci.id_producto = prod_hijo.id WHERE c.codigo_barras = p.codigo_barras) as costo_combo_calc
@@ -82,27 +86,65 @@ if (isset($_POST['guardar_edicion_total'])) {
     } catch (Exception $e) { $conexion->rollBack(); die($e->getMessage()); }
 }
 
-// 3. VENDER TICKET
+// 3. VENDER TICKET (PROTEGIDO Y DEFINIDO)
 if (isset($_POST['vender_ticket'])) {
-    $idUsuario = $_SESSION['usuario_id'];
-    $caja = $conexion->query("SELECT id FROM cajas_sesion WHERE id_usuario = $idUsuario AND estado = 'abierta'")->fetch(PDO::FETCH_ASSOC);
-    if (!$caja) { echo "<script>alert('¡Abrí caja!'); window.location.href='detalle_sorteo.php?id=$id';</script>"; exit; }
-    
-    $metodo_pago = $_POST['metodo_pago'] ?? 'Efectivo';
-    
     try {
         $conexion->beginTransaction();
-        $conexion->prepare("INSERT INTO sorteo_tickets (id_sorteo, id_cliente, numero_ticket) VALUES (?,?,?)")->execute([$id, $_POST['id_cliente'], $_POST['numero_elegido']]);
-        $conexion->prepare("INSERT INTO ventas (codigo_ticket, id_caja_sesion, id_usuario, id_cliente, total, metodo_pago, estado) VALUES (?, ?, ?, ?, ?, ?, 'completada')")->execute(["RIFA-{$id}-N-{$_POST['numero_elegido']}", $caja['id'], $idUsuario, $_POST['id_cliente'], $sorteo['precio_ticket'], $metodo_pago]);
         
-        if ($metodo_pago === 'Efectivo') {
-            $conexion->query("UPDATE cajas_sesion SET total_ventas = total_ventas + {$sorteo['precio_ticket']}, monto_final = monto_final + {$sorteo['precio_ticket']} WHERE id = {$caja['id']}");
-        } else {
-            $conexion->query("UPDATE cajas_sesion SET total_ventas = total_ventas + {$sorteo['precio_ticket']} WHERE id = {$caja['id']}");
+        // Procesar variables necesarias
+        $idUsuario = $_SESSION['usuario_id'];
+        $metodo_pago = $_POST['metodo_pago'] ?? 'Efectivo';
+        $codigo_venta = "RIFA-" . time();
+        
+        // Convertir la cadena de números "01, 05" en un array
+        $input_nums = $_POST['numeros_elegidos'] ?? '';
+        $numeros_elegidos = array_map('trim', explode(',', $input_nums));
+        $numeros_elegidos = array_filter($numeros_elegidos); // Limpiar vacíos
+        
+        $total_venta = count($numeros_elegidos) * (float)$sorteo['precio_ticket'];
+
+        $stmtTicket = $conexion->prepare("INSERT INTO sorteo_tickets (id_sorteo, id_cliente, numero_ticket) VALUES (?,?,?)");
+        foreach($numeros_elegidos as $num) { 
+            $stmtTicket->execute([$id, $_POST['id_cliente'], $num]); 
         }
         
-        $conexion->commit(); header("Location: detalle_sorteo.php?id=$id&msg=ticket_ok"); exit;
-    } catch (Exception $e) { $conexion->rollBack(); die($e->getMessage()); }
+        $estado_venta = $_POST['estado_venta'] ?? 'completada';
+        $id_transferencia = $_POST['id_transferencia'] ?? null;
+
+        $conexion->prepare("INSERT INTO ventas (codigo_ticket, id_caja_sesion, id_usuario, id_cliente, total, metodo_pago, estado) VALUES (?, ?, ?, ?, ?, ?, ?)")->execute([$codigo_venta, $caja['id'], $idUsuario, $_POST['id_cliente'], $total_venta, $metodo_pago, $estado_venta]);
+        $venta_id = $conexion->lastInsertId();
+        
+        // Sumar a la caja SOLO si está completada
+        if ($estado_venta === 'completada' && isset($caja['id'])) {
+            if ($metodo_pago === 'Efectivo') {
+                $conexion->query("UPDATE cajas_sesion SET total_ventas = total_ventas + {$total_venta}, monto_final = monto_final + {$total_venta} WHERE id = {$caja['id']}");
+            } else {
+                $conexion->query("UPDATE cajas_sesion SET total_ventas = total_ventas + {$total_venta} WHERE id = {$caja['id']}");
+            }
+        }
+
+        if (!empty($id_transferencia) && isset($caja['id'])) {
+            $stmtTr = $conexion->prepare("SELECT datos_json FROM transferencias WHERE id = ?");
+            $stmtTr->execute([$id_transferencia]);
+            $trData = $stmtTr->fetch(PDO::FETCH_ASSOC);
+            if ($trData) {
+                $jsonTr = json_decode($trData['datos_json'], true);
+                $jsonTr['estado'] = ($estado_venta === 'pendiente_transferencia') ? 'pendiente' : 'completada';
+                $jsonTr['id_venta'] = $venta_id;
+                $jsonTr['es_sorteo'] = true;
+                $jsonTr['total_venta'] = $total_venta;
+                $jsonTr['id_caja'] = $caja['id'];
+                $conexion->prepare("UPDATE transferencias SET datos_json = ? WHERE id = ?")->execute([json_encode($jsonTr, JSON_UNESCAPED_UNICODE), $id_transferencia]);
+            }
+        }
+        
+        $conexion->commit(); 
+        header("Location: detalle_sorteo.php?id=$id&msg=ticket_ok"); 
+        exit;
+    } catch (Exception $e) { 
+        $conexion->rollBack(); 
+        die("Error al procesar ticket: " . $e->getMessage()); 
+    }
 }
 
 // 4. EJECUTAR SORTEO (LA RULETA RESTAURADA)
@@ -158,20 +200,23 @@ include 'includes/layout_header.php'; ?>
 </style>
 
 <div class="container py-4">
-    <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-4 gap-3">
         <div>
-            <a href="sorteos.php" class="text-muted text-decoration-none small mb-2 d-block"><i class="bi bi-arrow-left"></i> VOLVER A SORTEOS</a>
-            <h2 class="fw-bold text-primary mb-0">
+            <h2 class="fw-bold text-primary mb-0" style="font-size: 1.6rem;">
                 <i class="bi bi-ticket-perforated me-2"></i><?php echo htmlspecialchars($sorteo['titulo']); ?>
-                <span class="badge <?php echo ($sorteo['estado']=='activo'?'bg-success':($sorteo['estado']=='pendiente'?'bg-warning text-dark':'bg-secondary')); ?> fs-6 align-middle ms-2"><?php echo strtoupper($sorteo['estado']); ?></span>
+                <span class="badge <?php echo ($sorteo['estado']=='activo'?'bg-success':($sorteo['estado']=='pendiente'?'bg-warning text-dark':'bg-secondary')); ?> fs-6 align-middle ms-2 shadow-sm"><?php echo strtoupper($sorteo['estado']); ?></span>
             </h2>
         </div>
-        <div class="d-flex gap-2">
+        <div class="d-flex flex-wrap gap-2 justify-content-end">
+            <a href="sorteos.php" class="btn text-white fw-bold rounded-pill px-4 shadow-sm" style="background-color: #102A57;">
+                <i class="bi bi-arrow-left me-2"></i>VOLVER
+            </a>
+            
             <?php if($sorteo['estado'] == 'pendiente'): ?>
-                <button class="btn btn-outline-primary fw-bold rounded-pill px-4" onclick="abrirModalEdicionTotal()"><i class="bi bi-pencil-square me-2"></i>EDITAR SORTEO</button>
-                <button class="btn btn-success fw-bold rounded-pill px-4 shadow" onclick="lanzarConfirmacionFinal()"><i class="bi bi-check-circle-fill me-2"></i>CONFIRMAR SORTEO</button>
+                <button class="btn btn-outline-primary fw-bold rounded-pill px-4 shadow-sm" onclick="abrirModalEdicionTotal()"><i class="bi bi-pencil-square me-2"></i>EDITAR</button>
+                <button class="btn btn-success fw-bold rounded-pill px-4 shadow" onclick="lanzarConfirmacionFinal()"><i class="bi bi-check-circle-fill me-2"></i>CONFIRMAR</button>
             <?php elseif($sorteo['estado'] == 'activo'): ?>
-                <button class="btn btn-warning fw-bold shadow rounded-pill px-4" onclick="iniciarSorteoVisual()"><i class="bi bi-trophy-fill me-2"></i>¡REALIZAR SORTEO!</button>
+                <button class="btn btn-warning fw-bold shadow rounded-pill px-4 text-dark" onclick="iniciarSorteoVisual()"><i class="bi bi-trophy-fill me-2"></i>¡SORTEAR!</button>
             <?php endif; ?>
         </div>
     </div>
@@ -260,32 +305,40 @@ include 'includes/layout_header.php'; ?>
                     <?php if($sorteo['estado'] == 'activo'): ?>
                     
                         <form method="POST" id="formVenta" class="bg-light p-3 rounded-4 border shadow-sm mb-4">
+                            <input type="hidden" name="estado_venta" id="hidden_estado_venta" value="completada">
+<input type="hidden" name="id_transferencia" id="hidden_id_transferencia" value="">
                             <div class="row g-2 align-items-end">
                                 <div class="col-md-4">
-                                    <label class="small fw-bold text-muted uppercase mb-1">Cliente</label>
-                                    <div class="input-group">
-                                        <select name="id_cliente" id="select_clientes" class="form-select fw-bold shadow-sm">
-                                            <?php foreach($clientes as $c): ?>
-                                                <option value="<?php echo $c['id']; ?>"><?php echo $c['nombre']; ?></option>
-                                            <?php endforeach; ?>
-                                        </select>
-                                        <button class="btn btn-success" type="button" data-bs-toggle="modal" data-bs-target="#modalClienteRapido"><i class="bi bi-person-plus-fill"></i></button>
+                                    <label class="small fw-bold text-muted uppercase mb-1">Buscar Cliente</label>
+                                    <div class="d-flex shadow-sm rounded-3">
+                                        <div class="flex-grow-1">
+                                            <select name="id_cliente" id="select_clientes" class="form-select fw-bold border-end-0 rounded-start-3 rounded-end-0" style="width: 100%;">
+                                                <option value="">Buscar por nombre o DNI...</option>
+                                                <?php foreach($clientes as $c): 
+                                                    $dniTexto = !empty($c['dni']) ? ' - DNI: ' . $c['dni'] : '';
+                                                ?>
+                                                    <option value="<?php echo $c['id']; ?>"><?php echo htmlspecialchars($c['nombre']) . $dniTexto; ?></option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                        </div>
+                                        <button class="btn btn-success border-0 px-3 rounded-end-3" type="button" onclick="abrirModalClienteRapido()" title="Crear Cliente Nuevo">
+                                            <i class="bi bi-person-plus-fill"></i>
+                                        </button>
                                     </div>
                                 </div>
                                 
                                 <div class="col-md-2">
-                                    <label class="small fw-bold text-muted uppercase mb-1">Nº</label>
-                                    <input type="text" name="numero_elegido" id="inputNumeroElegido" class="form-control text-center fw-bold fs-5 text-primary bg-white shadow-sm" readonly placeholder="--">
+                                    <label class="small fw-bold text-muted uppercase mb-1">Nº Tickets</label>
+                                    <input type="text" name="numeros_elegidos" id="inputNumeroElegido" class="form-control text-center fw-bold fs-6 text-primary bg-white shadow-sm" readonly placeholder="--">
                                 </div>
                                 
                                 <div class="col-md-3">
                                     <label class="small fw-bold text-muted uppercase mb-1">Forma de Pago</label>
                                     <select name="metodo_pago" id="metodo_pago_sorteo" class="form-select fw-bold shadow-sm">
                                         <option value="Efectivo">💵 Efectivo</option>
-                                        <option value="mercadopago">📱 MP (QR)</option>
-                                        <option value="Transferencia">🏦 Transf.</option>
-                                        <option value="Debito">💳 Débito</option>
-                                        <option value="Credito">💳 Crédito</option>
+                                        <option value="mercadopago">📱 QR Billeteras virtuales</option>
+                                        <option value="Point">💳 Tarjeta (Posnet)</option>
+                                        <option value="Transferencia">🏦 Transferencia</option>
                                     </select>
                                 </div>
 
@@ -296,6 +349,17 @@ include 'includes/layout_header.php'; ?>
                                     <button type="button" id="btn-sync-mp-sorteo" class="btn btn-info text-white w-100 fw-bold rounded-3 shadow py-2 d-none" onclick="enviarMontoAMercadoPagoSorteo()">
                                         <i class="bi bi-qr-code-scan me-1"></i>AL QR
                                     </button>
+                                    <button type="button" id="btn-sync-point-sorteo" class="btn btn-primary text-white w-100 fw-bold rounded-3 shadow py-2 d-none" onclick="enviarMontoAPointSorteo()">
+                                        <i class="bi bi-calculator me-1"></i>AL POSNET
+                                    </button>
+                                    <div id="btn-escaner-sorteo" class="d-none">
+                                        <button type="button" class="btn btn-info w-100 fw-bold text-white shadow py-2 mb-1" onclick="abrirEscanerTransferenciaSorteo()">
+                                            <i class="bi bi-camera-video fs-6 me-1"></i> LECTOR IA
+                                        </button>
+                                        <button type="button" class="btn btn-link w-100 text-muted p-0 m-0 text-decoration-none" style="font-size: 0.75rem;" onclick="$('#submitReal').click()">
+                                            Cobro manual
+                                        </button>
+                                    </div>
                                     <input type="submit" name="vender_ticket" id="submitReal" style="display:none;">
                                 </div>
                             </div>
@@ -348,7 +412,6 @@ include 'includes/layout_header.php'; ?>
 </div>
 </div></div></div><div class="modal-footer border-0 bg-light"><button type="submit" name="guardar_edicion_total" class="btn btn-primary w-100 py-3 rounded-pill fw-bold shadow" onclick="prepE()">GUARDAR CAMBIOS TOTALES</button></div></form></div></div>
 
-<div class="modal fade" id="modalClienteRapido" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content rounded-4 border-0 shadow-lg"><div class="modal-header bg-success text-white border-0 py-3"><h5 class="modal-title fw-bold">Registrar Cliente Express</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div><div class="modal-body p-4"><form id="formClienteRapido"><div class="mb-3"><label class="fw-bold small">Nombre Completo</label><input type="text" id="rapido_nombre" class="form-control fw-bold" required></div><div class="mb-3"><label class="fw-bold small">DNI</label><input type="text" id="rapido_dni" class="form-control"></div><div class="mb-3"><label class="fw-bold small">Teléfono</label><input type="text" id="rapido_telefono" class="form-control"></div><button type="submit" class="btn btn-primary w-100 py-2 rounded-pill fw-bold mt-2">GUARDAR Y SELECCIONAR</button></form></div></div></div></div>
 
 <form id="formConfirmarFinal" method="POST"><input type="hidden" name="accion_confirmar" value="1"></form>
 
@@ -381,7 +444,33 @@ include 'includes/layout_header.php'; ?>
         $('#ed_ganancia_total').css('color', gan >= 0 ? '#198754' : '#dc3545');
     }
     function prepE() { let prems = []; $('.fila-e').each(function(){ let t = $(this).find('.t-e').val(); let obj = { tipo: t, costo: $(this).find('.c-e').val() }; if(t==='interno') { let s = $(this).find('.s-e'); obj.id = s.val(); obj.nombre = s.find(':selected').text(); } else { obj.nombre = $(this).find('.i-m-e').val(); } prems.push(obj); }); $('#edit_prems_json').val(JSON.stringify(prems)); }
-    function seleccionarNumeroIndividual(n, el) { $('#inputNumeroElegido').val(n); $('.num-box').removeClass('num-seleccionado'); $(el).addClass('num-seleccionado'); }
+    let numerosSeleccionados = [];
+    let precioTicketUnitario = <?php echo $sorteo['precio_ticket']; ?>;
+
+    function seleccionarNumeroIndividual(n, el) { 
+        const index = numerosSeleccionados.indexOf(n);
+        if (index > -1) {
+            // Si ya estaba seleccionado, lo desmarcamos
+            numerosSeleccionados.splice(index, 1);
+            $(el).removeClass('num-seleccionado');
+        } else {
+            // Si no estaba, lo sumamos
+            numerosSeleccionados.push(n);
+            $(el).addClass('num-seleccionado');
+        }
+        
+        // Ordenamos los números de menor a mayor
+        numerosSeleccionados.sort((a,b) => a - b);
+        $('#inputNumeroElegido').val(numerosSeleccionados.join(', '));
+        
+        // Actualizamos el botón de cobrar sumando el total
+        let total = numerosSeleccionados.length * precioTicketUnitario;
+        if(numerosSeleccionados.length > 0) {
+            $('#btn-cobrar-ticket').html(`<i class="bi bi-cash-coin me-1"></i>COBRAR $${total.toLocaleString('es-AR')}`);
+        } else {
+            $('#btn-cobrar-ticket').html(`<i class="bi bi-cash-coin me-1"></i>COBRAR`);
+        }
+    }
 
     function lanzarConfirmacionFinal() {
         Swal.fire({
@@ -405,80 +494,59 @@ include 'includes/layout_header.php'; ?>
 
     // Alternar botones según el método de pago
     $('#metodo_pago_sorteo').change(function() {
+        $('#btn-cobrar-ticket, #btn-sync-mp-sorteo, #btn-sync-point-sorteo, #btn-escaner-sorteo').addClass('d-none');
+        
         if ($(this).val() === 'mercadopago') {
-            $('#btn-cobrar-ticket').addClass('d-none');
             $('#btn-sync-mp-sorteo').removeClass('d-none');
+        } else if ($(this).val() === 'Point') {
+            $('#btn-sync-point-sorteo').removeClass('d-none');
+        } else if ($(this).val() === 'Transferencia') {
+            $('#btn-escaner-sorteo').removeClass('d-none');
         } else {
             $('#btn-cobrar-ticket').removeClass('d-none');
-            $('#btn-sync-mp-sorteo').addClass('d-none');
         }
     });
 
     // --- LÓGICA DE COBRO LIMPIA SIN RADAR ---
     function validarVentaPro() { 
-        let num = $('#inputNumeroElegido').val();
-        if(!num) { Swal.fire('Error', 'Elegí un número en la grilla.', 'error'); return; } 
+        if(numerosSeleccionados.length === 0) { Swal.fire('Error', 'Elegí al menos un número en la grilla.', 'error'); return; } 
         
+        let idCliente = $('#select_clientes').val();
+        if(!idCliente) { Swal.fire('Atención', 'Debés buscar y seleccionar un cliente primero.', 'warning'); return; }
+        
+        let numStr = numerosSeleccionados.join(', ');
         let metodo = $('#metodo_pago_sorteo').val();
         let metodoNombre = $('#metodo_pago_sorteo option:selected').text();
-        let precioTicket = <?php echo $sorteo['precio_ticket']; ?>;
+        let precioTotal = numerosSeleccionados.length * precioTicketUnitario;
 
-        if (metodo === 'Transferencia') {
-            Swal.fire({
-                title: 'Confirmar Transferencia',
-                html: `¿Ya verificaste en tu app que ingresaron los <b>$${precioTicket}</b> por el ticket <b>#${num}</b>?`,
-                icon: 'question',
-                showCancelButton: true,
-                confirmButtonText: 'Sí, ya ingresó',
-                cancelButtonText: 'Aún no',
-                confirmButtonColor: '#198754'
-            }).then((result) => {
-                if (result.isConfirmed) {
-                    $('#submitReal').click(); 
-                }
-            });
-        } else {
-            Swal.fire({
-                title: '¿Confirmar Pago?',
-                html: `Ticket: <b class="text-primary fs-4">#${num}</b><br>Método: <b>${metodoNombre}</b><br><br>¿Ya recibiste el dinero?`,
-                icon: 'question',
-                showCancelButton: true,
-                confirmButtonText: 'Sí, cobrar ticket',
-                cancelButtonText: 'Cancelar',
-                confirmButtonColor: '#198754'
-            }).then((result) => {
-                if (result.isConfirmed) {
-                    $('#submitReal').click(); 
-                }
-            });
-        }
+        Swal.fire({
+            title: '¿Confirmar Pago?',
+            html: `Tickets: <b class="text-primary fs-5">${numStr}</b><br>Total: <b class="text-success fs-4">$${precioTotal.toLocaleString('es-AR')}</b><br>Método: <b>${metodoNombre}</b><br><br>¿Ya recibiste el dinero?`,
+            icon: 'question',
+            showCancelButton: true,
+            confirmButtonText: 'Sí, cobrar tickets',
+            cancelButtonText: 'Cancelar',
+            confirmButtonColor: '#198754'
+        }).then((result) => {
+            if (result.isConfirmed) { $('#submitReal').click(); }
+        });
     }
 
-    // --- QR DE MERCADO PAGO EN SORTEO CON BOTÓN CANCELAR ---
+    // --- QR DE MERCADO PAGO EN SORTEO ---
     let intervaloMPSorteo = null;
-
     function enviarMontoAMercadoPagoSorteo() {
-        if(!$('#inputNumeroElegido').val()){ Swal.fire('Error', 'Elegí un número en la grilla.', 'error'); return; } 
+        if(numerosSeleccionados.length === 0){ Swal.fire('Error', 'Elegí al menos un número.', 'error'); return; } 
+        let idCliente = $('#select_clientes').val();
+        if(!idCliente) { Swal.fire('Atención', 'Debés buscar y seleccionar un cliente primero.', 'warning'); return; }
         
-        let totalRifa = <?php echo $sorteo['precio_ticket']; ?>; 
+        let totalRifa = numerosSeleccionados.length * precioTicketUnitario; 
         const btn = $('#btn-sync-mp-sorteo');
-        
         btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm"></span> Esperando...');
 
         $.post('acciones/mp_sync.php', { total: totalRifa }, function(res) {
             if(res.status === 'success') {
                 const ref = res.referencia;
-                
-                Swal.fire({ 
-                    icon: 'info', 
-                    title: 'QR Activado', 
-                    text: 'El cliente debe escanear el QR en el mostrador.', 
-                    showConfirmButton: false,
-                    showCancelButton: true,
-                    cancelButtonText: '🛑 Cancelar Espera',
-                    cancelButtonColor: '#dc3545',
-                    allowOutsideClick: false
-                }).then((result) => {
+                Swal.fire({ icon: 'info', title: 'QR Activado', text: 'El cliente debe escanear el QR en el mostrador.', showConfirmButton: false, showCancelButton: true, cancelButtonText: '🛑 Cancelar', cancelButtonColor: '#dc3545', allowOutsideClick: false }).then((result) => {
                     if (result.dismiss === Swal.DismissReason.cancel) {
                         if(intervaloMPSorteo) clearInterval(intervaloMPSorteo);
                         btn.prop('disabled', false).html('<i class="bi bi-qr-code-scan me-1"></i>AL QR');
@@ -486,7 +554,6 @@ include 'includes/layout_header.php'; ?>
                 });
 
                 if(intervaloMPSorteo) clearInterval(intervaloMPSorteo);
-                
                 intervaloMPSorteo = setInterval(function() {
                     $.getJSON('acciones/verificar_pago_mp.php', { referencia: ref }, function(statusRes) {
                         if(statusRes.estado === 'pagado') {
@@ -502,7 +569,51 @@ include 'includes/layout_header.php'; ?>
             }
         }, 'json').fail(function() {
             btn.prop('disabled', false).html('<i class="bi bi-qr-code-scan me-1"></i>AL QR');
-            Swal.fire('Error', 'No se pudo conectar con MercadoPago', 'error');
+            Swal.fire('Error', 'No se conectó con MercadoPago', 'error');
+        });
+    }
+
+    // --- POSNET FÍSICO (MERCADO PAGO POINT) ---
+    let intervaloPointSorteo = null;
+    function enviarMontoAPointSorteo() {
+        if(numerosSeleccionados.length === 0){ Swal.fire('Error', 'Elegí al menos un número.', 'error'); return; } 
+        let idCliente = $('#select_clientes').val();
+        if(!idCliente) { Swal.fire('Atención', 'Debés buscar y seleccionar un cliente primero.', 'warning'); return; }
+        
+        let totalRifa = numerosSeleccionados.length * precioTicketUnitario; 
+        const btn = $('#btn-sync-point-sorteo');
+        btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm"></span> Mandando...');
+
+        $.post('acciones/mp_point_sync.php', { total: totalRifa }, function(res) {
+            if(res.status === 'success') {
+                const paymentIntentId = res.payment_intent_id;
+                Swal.fire({ icon: 'info', title: 'Posnet Activado', text: 'Pase la tarjeta por el Posnet físico.', showConfirmButton: false, showCancelButton: true, cancelButtonText: '🛑 Cancelar', cancelButtonColor: '#dc3545', allowOutsideClick: false }).then((result) => {
+                    if (result.dismiss === Swal.DismissReason.cancel) {
+                        if(intervaloPointSorteo) clearInterval(intervaloPointSorteo);
+                        $.post('acciones/mp_point_cancelar.php', { intent_id: paymentIntentId });
+                        btn.prop('disabled', false).html('<i class="bi bi-calculator me-1"></i>AL POSNET');
+                    }
+                });
+
+                if(intervaloPointSorteo) clearInterval(intervaloPointSorteo);
+                intervaloPointSorteo = setInterval(function() {
+                    $.getJSON('acciones/verificar_pago_point.php', { intent_id: paymentIntentId }, function(statusRes) {
+                        if(statusRes.estado === 'FINISHED') { 
+                            clearInterval(intervaloPointSorteo); Swal.close(); $('#submitReal').click(); 
+                        } else if (statusRes.estado === 'CANCELED' || statusRes.estado === 'ERROR') {
+                            clearInterval(intervaloPointSorteo);
+                            btn.prop('disabled', false).html('<i class="bi bi-calculator me-1"></i>AL POSNET');
+                            Swal.fire('Atención', 'El pago fue cancelado en el Posnet.', 'warning');
+                        }
+                    });
+                }, 3000);
+            } else {
+                btn.prop('disabled', false).html('<i class="bi bi-calculator me-1"></i>AL POSNET');
+                Swal.fire('Error', res.msg, 'error');
+            }
+        }, 'json').fail(function() {
+            btn.prop('disabled', false).html('<i class="bi bi-calculator me-1"></i>AL POSNET');
+            Swal.fire('Error', 'Falla de red con el Posnet', 'error');
         });
     }
 
@@ -602,19 +713,222 @@ include 'includes/layout_header.php'; ?>
         }, 80);
     }
 
-    $('#formClienteRapido').submit(function(e) {
-        e.preventDefault();
-        $.post('acciones/guardar_cliente_rapido.php', {
-            nombre: $('#rapido_nombre').val(),
-            dni: $('#rapido_dni').val(),
-            telefono: $('#rapido_telefono').val()
-        }, function(res) {
-            if(res.status === 'success') {
-                $('#select_clientes').append(new Option(res.nombre, res.id, true, true));
-                $('#modalClienteRapido').modal('hide');
-                Swal.fire({ icon: 'success', title: 'Registrado', toast: true, position: 'top-end', timer: 1500, showConfirmButton: false });
-            } else { Swal.fire('Error', res.msg, 'error'); }
-        }, 'json');
-    });
+    function abrirModalClienteRapido() {
+        Swal.fire({
+            title: '<i class="bi bi-person-plus-fill text-success"></i> Cliente Rápido',
+            html: `
+                <div class="text-start">
+                    <div class="mb-2">
+                        <label class="small fw-bold text-muted">Nombre Completo *</label>
+                        <input type="text" id="sa2-rapido-nombre" class="form-control fw-bold" placeholder="Ej: Juan Perez" required onkeyup="generarUsuarioRapido()">
+                    </div>
+                    <div class="mb-2">
+                        <label class="small fw-bold text-muted">Email (Opcional - Para tickets)</label>
+                        <input type="email" id="sa2-rapido-email" class="form-control" placeholder="correo@ejemplo.com">
+                    </div>
+                    <div class="row g-2 mb-2">
+                        <div class="col-6">
+                            <label class="small fw-bold text-muted">DNI / CUIT</label>
+                            <input type="number" id="sa2-rapido-dni" class="form-control" placeholder="Opcional">
+                        </div>
+                        <div class="col-6">
+                            <label class="small fw-bold text-muted">Usuario Web</label>
+                            <input type="text" id="sa2-rapido-usuario" class="form-control bg-light text-primary fw-bold" readonly>
+                        </div>
+                    </div>
+                    <div class="mb-2">
+                        <label class="small fw-bold text-muted">WhatsApp (Ej: 54911...)</label>
+                        <input type="number" id="sa2-rapido-telefono" class="form-control" placeholder="Opcional">
+                    </div>
+                </div>
+            `,
+            showCancelButton: true,
+            confirmButtonText: '<i class="bi bi-save"></i> Guardar y Seleccionar',
+            cancelButtonText: 'Cancelar',
+            confirmButtonColor: '#198754',
+            preConfirm: () => {
+                const nombre = document.getElementById('sa2-rapido-nombre').value.trim();
+                const email = document.getElementById('sa2-rapido-email').value.trim();
+                const dni = document.getElementById('sa2-rapido-dni').value.trim();
+                const usuario = document.getElementById('sa2-rapido-usuario').value.trim();
+                const telefono = document.getElementById('sa2-rapido-telefono').value.trim();
+                
+                if (!nombre) {
+                    Swal.showValidationMessage('El nombre es obligatorio');
+                    return false;
+                }
+                
+                return $.post('acciones/cliente_rapido.php', {
+                    nombre: nombre, email: email, dni: dni, usuario: usuario, whatsapp: telefono
+                }).then(res => {
+                    if (res.status !== 'success') { throw new Error(res.msg || 'Error al guardar en la Base de Datos'); }
+                    return res;
+                }).catch(err => {
+                    Swal.showValidationMessage(err.message || 'Error de conexión');
+                });
+            }
+        }).then((result) => {
+            if (result.isConfirmed && result.value && result.value.status === 'success') {
+                // Agregamos al select y lo dejamos seleccionado automáticamente
+                $('#select_clientes').append(new Option(result.value.nombre, result.value.id, true, true));
+                Swal.fire({ icon: 'success', title: '¡Creado!', text: 'El cliente ya está cargado para el sorteo.', timer: 2000, showConfirmButton: false });
+            }
+        });
+    }
+
+    function generarUsuarioRapido() {
+        let nombreVal = document.getElementById('sa2-rapido-nombre').value.trim().toLowerCase();
+        nombreVal = nombreVal.replace(/ñ/g, 'n').replace(/Ñ/g, 'n');
+        let partes = nombreVal.split(' ').filter(p => p.length > 0);
+        let userSugerido = '';
+        if (partes.length === 1) { userSugerido = partes[0]; } 
+        else if (partes.length >= 2) { userSugerido = partes[0].charAt(0) + partes[partes.length - 1]; }
+        userSugerido = userSugerido.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, '');
+        document.getElementById('sa2-rapido-usuario').value = userSugerido;
+    }
 </script>
+
+<link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+
+<style>
+    .select2-container .select2-selection--single {
+        height: 38px !important;
+        border: 1px solid #dee2e6 !important;
+        border-right: none !important;
+        border-radius: 0.375rem 0 0 0.375rem !important;
+        display: flex;
+        align-items: center;
+    }
+    .select2-container--default .select2-selection--single .select2-selection__arrow { height: 36px !important; }
+    .select2-selection__rendered { font-weight: bold !important; color: #102A57 !important; }
+</style>
+
+<script>
+    $(document).ready(function() {
+        $('#select_clientes').select2({
+            placeholder: "Escribí el nombre o DNI...",
+            allowClear: false
+        });
+    });
+    // --- LECTOR DE TRANSFERENCIAS IA (COPIA DE VENTAS) ---
+    let fotosEscanerSorteo = []; 
+
+    function abrirEscanerTransferenciaSorteo(esSuma = false) {
+    if(numerosSeleccionados.length === 0){ Swal.fire('Error', 'Elegí al menos un número en la grilla.', 'error'); return; } 
+    let idCliente = $('#select_clientes').val();
+    if(!idCliente) { Swal.fire('Atención', 'Debés buscar y seleccionar un cliente primero.', 'warning'); return; }
+
+    if (!esSuma) fotosEscanerSorteo = []; 
+    
+    let input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.capture = 'environment';
+
+    input.onchange = e => {
+        let file = e.target.files[0];
+        if (file) {
+            let img = new Image();
+            img.onload = () => {
+                URL.revokeObjectURL(img.src); 
+                let canvas = document.createElement('canvas');
+                let ctx = canvas.getContext('2d');
+                
+                let scale = 1280 / Math.max(img.width, img.height);
+                if (scale > 1) scale = 1; 
+                canvas.width = img.width * scale;
+                canvas.height = img.height * scale;
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                
+                let fotoBase64 = canvas.toDataURL('image/jpeg', 0.80);
+                fotosEscanerSorteo.push(fotoBase64);
+
+                Swal.fire({
+                    title: fotosEscanerSorteo.length > 1 ? '¡Parte agregada!' : '¿La foto está nítida?',
+                    text: `Llevás ${fotosEscanerSorteo.length} captura(s) lista(s)`,
+                    imageUrl: fotoBase64,
+                    imageWidth: 300,
+                    showCancelButton: true,
+                    showDenyButton: true,
+                    confirmButtonText: '<i class="bi bi-check-lg"></i> Listo, Analizar',
+                    denyButtonText: '<i class="bi bi-plus-circle"></i> Sumar otra parte',
+                    cancelButtonText: '<i class="bi bi-arrow-repeat"></i> Reintentar',
+                    confirmButtonColor: '#28a745',
+                    denyButtonColor: '#17a2b8',
+                    cancelButtonColor: '#dc3545',
+                }).then((result) => {
+                    if (result.isConfirmed) {
+                        Swal.fire({ title: 'Analizando captura(s)...', html: 'Extrayendo datos con IA<br><i>Esto puede demorar unos segundos</i>', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); } });
+                        
+                        let precioTotal = numerosSeleccionados.length * precioTicketUnitario;
+
+                        $.ajax({
+                            url: 'acciones/procesar_ocr_transferencia.php',
+                            type: 'POST',
+                            dataType: 'json',
+                            data: { imagenes_base64: fotosEscanerSorteo, monto_esperado: precioTotal }, 
+                            timeout: 25000, 
+                            success: function(res) {
+                                if (res.status === 'success' || res.status === 'warning') {
+                                    let precioTotal = numerosSeleccionados.length * precioTicketUnitario;
+                                    let titulo = res.status === 'success' ? '¡Comprobante Válido!' : '⚠️ ALERTA DE MONTO';
+                                    let msjHtml = res.status === 'success' 
+                                        ? `La IA aprobó la captura.<br><br>¿Ya impactaron los <b>$${precioTotal.toLocaleString('es-AR')}</b> en tu cuenta bancaria?` 
+                                        : `El costo es: <b>$${res.monto_esperado}</b><br>La IA detectó: <b class="text-danger">$${res.monto_leido}</b><br><br>¿Desea forzar la aprobación?`;
+
+                                    Swal.fire({
+                                        title: titulo,
+                                        html: msjHtml,
+                                        icon: res.status === 'success' ? 'success' : 'warning',
+                                        showDenyButton: true,
+                                        showCancelButton: true,
+                                        allowOutsideClick: false,
+                                        confirmButtonText: '<i class="bi bi-check-circle"></i> Sí, ya impactó',
+                                        denyButtonText: '<i class="bi bi-clock-history"></i> Pendiente',
+                                        cancelButtonText: 'Rechazar / Cancelar',
+                                        confirmButtonColor: '#198754',
+                                        denyButtonColor: '#ffc107',
+                                        cancelButtonColor: '#dc3545'
+                                    }).then((conf) => {
+                                        if (conf.isConfirmed) {
+                                            $('#hidden_estado_venta').val('completada');
+                                            $('#hidden_id_transferencia').val(res.id_transferencia);
+                                            $('#submitReal').click();
+                                        } else if (conf.isDenied) {
+                                            $('#hidden_estado_venta').val('pendiente_transferencia');
+                                            $('#hidden_id_transferencia').val(res.id_transferencia);
+                                            $('#submitReal').click();
+                                        } else {
+                                            $.post('ver_transferencias_ia.php', { solicitud_borrar: 1, ids_a_borrar: JSON.stringify([res.id_transferencia]) });
+                                            Swal.fire('Operación pausada', 'Venta rechazada y foto eliminada.', 'info');
+                                        }
+                                    });
+                                } else {
+                                    Swal.fire('Error de IA', res.msg || 'No se detectó una transferencia válida.', 'error');
+                                }
+                            },
+                            error: function(jqXHR, textStatus) {
+                                if (textStatus === 'timeout') {
+                                    Swal.fire('Aviso', 'La IA tardó demasiado en responder. Volvé a intentarlo o cobrá manual.', 'warning');
+                                } else {
+                                    Swal.fire('Error', 'Se cortó la conexión con el servidor.', 'error');
+                                }
+                            }
+                        });
+                    } else if (result.isDenied) {
+                        abrirEscanerTransferenciaSorteo(true); 
+                    } else {
+                        fotosEscanerSorteo.pop(); 
+                        abrirEscanerTransferenciaSorteo(true); 
+                    }
+                });
+            };
+            img.src = URL.createObjectURL(file); 
+        }
+    };
+    input.click();
+}
+</script>
+
 <?php include 'includes/layout_footer.php'; ?>

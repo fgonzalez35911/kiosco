@@ -15,6 +15,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $cantidad = floatval($_POST['cantidad']);
     $id_proveedor = !empty($_POST['id_proveedor']) ? intval($_POST['id_proveedor']) : null;
     $nuevo_costo = !empty($_POST['nuevo_costo']) ? floatval($_POST['nuevo_costo']) : null;
+    $nuevo_precio = !empty($_POST['nuevo_precio']) ? floatval($_POST['nuevo_precio']) : null;
     $user_id = $_SESSION['usuario_id'];
 
     if ($id > 0 && $cantidad > 0) {
@@ -30,11 +31,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 $stmtUp = $conexion->prepare("UPDATE productos SET stock_actual = stock_actual + ? WHERE id = ?");
                 $stmtUp->execute([$cantidad, $id]);
 
-                // 2. Si se envió un nuevo costo, actualizarlo
+                // 2. Si se envió un nuevo costo o precio, actualizarlo
                 $detalle_costo = "";
                 if ($nuevo_costo !== null) {
                     $conexion->prepare("UPDATE productos SET precio_costo = ? WHERE id = ?")->execute([$nuevo_costo, $id]);
-                    $detalle_costo = " | Costo actualizado: $" . $prod->precio_costo . " -> $" . $nuevo_costo;
+                    $detalle_costo .= " | Costo actualizado: $" . $nuevo_costo;
+                }
+                if ($nuevo_precio !== null) {
+                    $conexion->prepare("UPDATE productos SET precio_venta = ? WHERE id = ?")->execute([$nuevo_precio, $id]);
+                    $detalle_costo .= " | P. Venta actualizado: $" . $nuevo_precio;
                 }
 
                 // 3. Si se seleccionó proveedor, registrarlo en la auditoría

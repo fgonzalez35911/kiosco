@@ -1,5 +1,5 @@
 <?php
-// cuenta_cliente.php - FINAL (Banner corregido: Mismo alto que el resto)
+// cuenta_cliente.php - ESTÁNDAR VANGUARD POS (Banner dinámico y orden mobile corregido)
 session_start();
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
@@ -18,7 +18,12 @@ if (!isset($_SESSION['usuario_id'])) {
 $id_cliente = intval($_GET['id'] ?? 0);
 if ($id_cliente <= 0) { header("Location: clientes.php"); exit; }
 
-if (!$id_cliente) { header("Location: clientes.php"); exit; }
+// --- CANDADO: PERMISO DE LECTURA ---
+$permisos = $_SESSION['permisos'] ?? [];
+$es_admin = ($_SESSION['rol'] <= 2);
+if (!$es_admin && !in_array('clientes_ver_cc', $permisos)) { 
+    header("Location: clientes.php"); exit; 
+}
 
 // DATOS CLIENTE
 $stmt = $conexion->prepare("SELECT * FROM clientes WHERE id = ?");
@@ -29,6 +34,10 @@ if (!$cliente) die("Cliente no encontrado.");
 // REGISTRAR MOVIMIENTO MANUAL
 $msg = '';
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
+    // --- CANDADO: PERMISO DE ESCRITURA ---
+    if (!$es_admin && !in_array('clientes_saldar_deuda', $permisos)) {
+        die("Error: No tienes permiso para registrar pagos o deudas.");
+    }
     try {
         $accion = $_POST['accion']; // 'pago' (haber) o 'deuda' (debe)
         $monto = (float)$_POST['monto'];
@@ -76,115 +85,63 @@ try {
 $limite = floatval($cliente['limite_credito']);
 $disponible = ($limite > 0) ? ($limite - $saldo_actual) : 'Ilimitado';
 
-// OBTENER COLOR SEGURO (ESTÁNDAR PREMIUM)
-$color_sistema = '#102A57';
-try {
-    $resColor = $conexion->query("SELECT color_principal FROM configuracion WHERE id=1");
-    if ($resColor) {
-        $dataC = $resColor->fetch(PDO::FETCH_ASSOC);
-        if (isset($dataC['color_principal'])) $color_sistema = $dataC['color_principal'];
-    }
-} catch (Exception $e) { }
+// Configuramos layout header
+require_once 'includes/layout_header.php'; 
+
+// --- DEFINICIÓN DEL BANNER DINÁMICO ESTANDARIZADO ---
+$titulo = strtoupper($cliente['nombre']);
+$subtitulo = "DNI: " . ($cliente['dni'] ?: '--') . " | Tel: " . ($cliente['telefono'] ?: '--');
+$icono_bg = "bi-person-badge"; // Ícono de cliente
+
+$botones = [
+    ['texto' => 'VOLVER', 'link' => "clientes.php", 'icono' => 'bi-arrow-left', 'class' => 'btn btn-light btn-sm fw-bold rounded-pill px-3 shadow-sm border text-primary']
+];
+
+$widgets = [
+    ['label' => 'Saldo Actual', 'valor' => '$'.number_format($saldo_actual, 2, ',', '.'), 'icono' => 'bi-cash-stack', 'border' => ($saldo_actual > 0) ? 'border-danger' : 'border-success', 'icon_bg' => ($saldo_actual > 0) ? 'bg-danger bg-opacity-20 text-danger' : 'bg-success bg-opacity-20 text-success'],
+    ['label' => 'Límite Crédito', 'valor' => ($limite > 0) ? '$'.number_format($limite, 0, ',', '.') : 'Ilimitado', 'icono' => 'bi-shield-lock', 'icon_bg' => 'bg-white bg-opacity-10'],
+    ['label' => 'Disponible', 'valor' => ($limite > 0) ? '$'.number_format($disponible, 2, ',', '.') : '∞', 'icono' => 'bi-cart-check', 'border' => 'border-info', 'icon_bg' => 'bg-info bg-opacity-20']
+];
+
+$centrar_botones = true; // Usamos el "interruptor" para que quede prolijo
+include 'includes/componente_banner.php'; 
 ?>
 
-<?php include 'includes/layout_header.php'; ?></div>
-
-<div class="header-blue" style="background-color: <?php echo $color_sistema; ?> !important;">
-    <i class="bi bi-wallet2 bg-icon-large"></i>
-    <div class="container position-relative">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-            <div>
-                <h2 class="font-cancha mb-0 text-white text-uppercase"><?php echo $cliente['nombre']; ?></h2>
-                <p class="opacity-75 mb-0 text-white small">
-                    DNI: <?php echo $cliente['dni'] ?: '--'; ?> | Tel: <?php echo $cliente['telefono'] ?: '--'; ?>
-                </p>
-            </div>
-            <div>
-                <a href="clientes.php" class="btn btn-light text-primary fw-bold rounded-pill px-4 shadow-sm">
-                    <i class="bi bi-arrow-left me-2"></i> VOLVER
-                </a>
-            </div>
-        </div>
-
-        <div class="row g-3">
-            <div class="col-12 col-md-4">
-                <div class="header-widget">
-                    <div>
-                        <div class="widget-label">Saldo Actual</div>
-                        <div class="widget-value <?php echo ($saldo_actual > 0) ? 'text-danger' : 'text-success'; ?>">
-                            $<?php echo number_format($saldo_actual, 2, ',', '.'); ?>
-                        </div>
-                    </div>
-                    <div class="icon-box <?php echo ($saldo_actual > 0) ? 'bg-danger' : 'bg-success'; ?> bg-opacity-20 text-white">
-                        <i class="bi bi-cash-stack"></i>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="col-6 col-md-4">
-                <div class="header-widget">
-                    <div>
-                        <div class="widget-label">Límite Crédito</div>
-                        <div class="widget-value text-white">
-                            <?php echo ($limite > 0) ? '$'.number_format($limite, 0, ',', '.') : 'Ilimitado'; ?>
-                        </div>
-                    </div>
-                    <div class="icon-box bg-white bg-opacity-10 text-white">
-                        <i class="bi bi-shield-lock"></i>
-                    </div>
-                </div>
-            </div>
-
-            <div class="col-6 col-md-4">
-                <div class="header-widget border-info">
-                    <div>
-                        <div class="widget-label">Disponible</div>
-                        <div class="widget-value text-white">
-                            <?php echo ($limite > 0) ? '$'.number_format($disponible, 2, ',', '.') : '∞'; ?>
-                        </div>
-                    </div>
-                    <div class="icon-box bg-info bg-opacity-20 text-white">
-                        <i class="bi bi-cart-check"></i>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<div class="container pb-5">
+<div class="container pb-5 mt-n4" style="position: relative; z-index: 20;">
     <div class="row g-4">
-        <div class="col-lg-4">
-            <div class="card card-form sticky-top" style="top: 20px; z-index: 1;">
+        
+        <?php if($es_admin || in_array('clientes_saldar_deuda', $permisos)): ?>
+        <div class="col-lg-4 order-2 order-lg-1">
+            <div class="card card-form sticky-top shadow-sm border-0 rounded-4" style="top: 20px; z-index: 1;">
                 <div class="card-header bg-success text-white fw-bold py-3 header-form" id="headerForm">
                     <i class="bi bi-pencil-square me-2"></i> Registrar Movimiento
                 </div>
-                <div class="card-body p-4">
+                <div class="card-body p-4 bg-white rounded-bottom-4">
                     <?php echo $msg; ?>
                     <form method="POST">
                         <div class="mb-3">
-                            <label class="fw-bold small text-muted mb-1">Tipo de Movimiento</label>
-                            <select name="accion" class="form-select form-select-lg fw-bold border-success text-success" id="tipoSelect" onchange="cambiarColor()">
+                            <label class="fw-bold small text-muted mb-1 text-uppercase">Tipo de Movimiento</label>
+                            <select name="accion" class="form-select form-select-lg fw-bold border-success text-success bg-light" id="tipoSelect" onchange="cambiarColor()">
                                 <option value="pago" class="text-success" selected>💵 Recibir Pago (Baja Deuda)</option>
-                                <option value="deuda" class="text-danger">📝 Ajuste Manual (Sube Deuda)</option>
+                                <option value="deuda" class="text-danger">📝 Fiado (Sube Deuda)</option>
                             </select>
                         </div>
                         
                         <div class="mb-3">
-                            <label class="fw-bold small text-muted mb-1">Monto ($)</label>
-                            <div class="input-group input-group-lg">
+                            <label class="fw-bold small text-muted mb-1 text-uppercase">Monto ($)</label>
+                            <div class="input-group input-group-lg shadow-sm rounded-3 overflow-hidden">
                                 <span class="input-group-text border-0 bg-light fw-bold text-muted">$</span>
                                 <input type="number" name="monto" class="form-control fw-bold bg-light border-0" step="0.01" required placeholder="0.00">
                             </div>
                         </div>
                         
                         <div class="mb-4">
-                            <label class="fw-bold small text-muted mb-1">Detalle / Concepto</label>
-                            <textarea name="concepto" class="form-control bg-light border-0" rows="3" placeholder="Ej: Pago parcial, Entrega de mercadería..."></textarea>
+                            <label class="fw-bold small text-muted mb-1 text-uppercase">Detalle / Concepto</label>
+                            <textarea name="concepto" class="form-control bg-light border-0 shadow-sm rounded-3" rows="3" placeholder="Ej: Pago parcial, Entrega de mercadería..."></textarea>
                         </div>
                         
                         <div class="d-grid">
-                            <button type="submit" class="btn btn-success btn-lg fw-bold py-3 shadow-sm" id="btnSubmit">
+                            <button type="submit" class="btn btn-success btn-lg fw-bold py-3 shadow-sm rounded-pill" id="btnSubmit">
                                 CONFIRMAR OPERACIÓN
                             </button>
                         </div>
@@ -192,44 +149,51 @@ try {
                 </div>
             </div>
         </div>
+        <?php endif; ?>
 
-        <div class="col-lg-8">
-            <div class="card shadow-sm border-0 rounded-4 overflow-hidden">
-                <div class="card-header bg-white py-3 fw-bold border-bottom">
-                    <i class="bi bi-clock-history me-2"></i> Historial de Movimientos
+        <div class="col-lg-<?php echo ($es_admin || in_array('clientes_saldar_deuda', $permisos)) ? '8' : '12'; ?> order-1 order-lg-2">
+            <div class="card shadow-sm border-0 rounded-4 overflow-hidden h-100">
+                <div class="card-header bg-white py-3 fw-bold border-bottom d-flex align-items-center">
+                    <i class="bi bi-clock-history text-primary me-2 fs-5"></i> Historial de Movimientos
                 </div>
-                <div class="card-body p-0">
+                <div class="card-body p-0 bg-white">
                     <div class="table-responsive">
                         <table class="table table-hover align-middle mb-0">
-                            <thead class="table-light small text-uppercase">
-                                <tr>
-                                    <th class="ps-4">Fecha</th>
-                                    <th>Concepto</th>
-                                    <th class="text-end text-danger">Debe (Fiado)</th>
-                                    <th class="text-end text-success pe-4">Haber (Pagos)</th>
-                                </tr>
+                            <thead class="table-light small text-uppercase text-muted">
+                                <tr class="align-middle">
+    <th class="py-3 text-center">Fecha</th>
+    <th class="text-center">Concepto</th>
+    <th class="text-center">Deuda</th>
+    <th class="text-center">Pagos</th>
+</tr>
                             </thead>
                             <tbody>
                                 <?php if(count($historial) > 0): ?>
                                     <?php foreach($historial as $m): ?>
                                     <tr>
                                         <td class="ps-4 small text-muted" style="min-width: 100px;">
-                                            <?php echo date('d/m/y H:i', strtotime($m['fecha'])); ?>
+                                            <div class="fw-bold text-dark"><?php echo date('d/m/y', strtotime($m['fecha'])); ?></div>
+                                            <small><?php echo date('H:i', strtotime($m['fecha'])); ?> hs</small>
                                         </td>
                                         <td>
-                                            <div class="fw-bold text-dark"><?php echo $m['concepto']; ?></div>
+                                            <div class="fw-bold text-dark"><?php echo htmlspecialchars($m['concepto']); ?></div>
                                             <small class="text-muted" style="font-size: 0.75rem;">Ref: #<?php echo $m['id']; ?></small>
                                         </td>
                                         <td class="text-end text-danger fw-bold" style="min-width: 100px;">
-                                            <?php echo ($m['tipo']=='debe') ? '$'.number_format($m['monto'],2,',','.') : '-'; ?>
+                                            <?php echo ($m['tipo']=='debe') ? '-$'.number_format($m['monto'],2,',','.') : '-'; ?>
                                         </td>
                                         <td class="text-end text-success fw-bold pe-4" style="min-width: 100px;">
-                                            <?php echo ($m['tipo']=='haber') ? '$'.number_format($m['monto'],2,',','.') : '-'; ?>
+                                            <?php echo ($m['tipo']=='haber') ? '+$'.number_format($m['monto'],2,',','.') : '-'; ?>
                                         </td>
                                     </tr>
                                     <?php endforeach; ?>
                                 <?php else: ?>
-                                    <tr><td colspan="4" class="text-center py-5 text-muted">Este cliente no tiene movimientos registrados.</td></tr>
+                                    <tr>
+                                        <td colspan="4" class="text-center py-5 text-muted">
+                                            <i class="bi bi-inbox fs-1 d-block mb-2 opacity-50"></i>
+                                            Este cliente no tiene movimientos registrados.
+                                        </td>
+                                    </tr>
                                 <?php endif; ?>
                             </tbody>
                         </table>
@@ -237,6 +201,7 @@ try {
                 </div>
             </div>
         </div>
+        
     </div>
 </div>
 
@@ -248,15 +213,13 @@ try {
         var select = document.getElementById('tipoSelect');
         
         if(tipo === 'deuda') {
-            // Modo Deuda (ROJO)
             header.className = 'card-header bg-danger text-white fw-bold py-3 header-form';
-            btn.className = 'btn btn-danger btn-lg fw-bold py-3 shadow-sm';
-            select.className = 'form-select form-select-lg fw-bold border-danger text-danger';
+            btn.className = 'btn btn-danger btn-lg fw-bold py-3 shadow-sm rounded-pill';
+            select.className = 'form-select form-select-lg fw-bold border-danger text-danger bg-light';
         } else {
-            // Modo Pago (VERDE)
             header.className = 'card-header bg-success text-white fw-bold py-3 header-form';
-            btn.className = 'btn btn-success btn-lg fw-bold py-3 shadow-sm';
-            select.className = 'form-select form-select-lg fw-bold border-success text-success';
+            btn.className = 'btn btn-success btn-lg fw-bold py-3 shadow-sm rounded-pill';
+            select.className = 'form-select form-select-lg fw-bold border-success text-success bg-light';
         }
     }
 </script>

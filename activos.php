@@ -10,10 +10,10 @@ if (!isset($_SESSION['usuario_id']) || $_SESSION['rol'] > 2) {
 // 1. OBTENER COLOR DEL SISTEMA Y ESTADÍSTICAS
 $color_sistema = '#102A57';
 try {
-    $resColor = $conexion->query("SELECT color_principal FROM configuracion WHERE id=1");
+    $resColor = $conexion->query("SELECT color_barra_nav FROM configuracion WHERE id=1");
     if ($resColor) {
         $dataC = $resColor->fetch(PDO::FETCH_ASSOC);
-        if (!empty($dataC['color_principal'])) $color_sistema = $dataC['color_principal'];
+        if (isset($dataC['color_barra_nav'])) $color_sistema = $dataC['color_barra_nav'];
     }
 } catch (Exception $e) { }
 
@@ -74,7 +74,8 @@ $bienes = $conexion->query("SELECT * FROM bienes_uso ORDER BY nombre ASC")->fetc
 require_once 'includes/layout_header.php'; 
 ?>
 
-<div class="header-blue" style="background: <?php echo $color_sistema; ?> !important; border-radius: 0 0 30px 30px !important; width: 100vw; margin-left: calc(-50vw + 50%); padding: 40px 0; position: relative; overflow: hidden;">
+<div class="header-blue" style="background: <?php echo $color_sistema; ?> !important; border-radius: 0 !important; width: 100vw; margin-left: calc(-50vw + 50%); padding: 40px 0; position: relative; overflow: hidden;">
+
     <i class="bi bi-pc-display-horizontal bg-icon-large"></i>
     <div class="container position-relative">
         <div class="d-flex flex-column flex-md-row justify-content-between align-items-center mb-4 gap-3">
