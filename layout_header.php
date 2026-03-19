@@ -17,13 +17,25 @@ if(!isset($nombre_mostrar) || !isset($rol_usuario) || !isset($logo_url)) {
     $nombre_mostrar = !empty($datosUsuario['nombre_completo']) ? $datosUsuario['nombre_completo'] : $datosUsuario['usuario'];
     $rol_usuario = $datosUsuario['id_rol'] ?? 3;
 
-    // 2. DATOS DE CONFIGURACIÓN (LOGO)
-    $stmtConfig = $conexion->query("SELECT logo_url, nombre_negocio FROM configuracion WHERE id=1");
+    // 2. DATOS DE CONFIGURACIÓN (LOGO Y COLOR GLOBAL)
+    $stmtConfig = $conexion->query("SELECT logo_url, nombre_negocio, color_barra_nav FROM configuracion WHERE id=1");
     $configData = $stmtConfig->fetch(PDO::FETCH_ASSOC);
     $logo_url = $configData['logo_url'] ?? '';
     $nombre_negocio = $configData['nombre_negocio'] ?? 'EL 10 POS';
+    $color_sistema = $configData['color_barra_nav'] ?? '#102A57'; // Color global
+} else {
+    // Fallback por si la variable no viene de un archivo anterior
+    if (!isset($color_sistema)) {
+        $stmtColor = $conexion->query("SELECT color_barra_nav FROM configuracion WHERE id=1");
+        $colorData = $stmtColor->fetch(PDO::FETCH_ASSOC);
+        $color_sistema = $colorData['color_barra_nav'] ?? '#102A57';
+    }
 }
 $current_page = basename($_SERVER['PHP_SELF']);
+
+// --- CARGA DE CANDADOS (PERMISOS) ---
+$permisos = $_SESSION['permisos'] ?? [];
+$es_admin = ($rol_usuario <= 2);
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -34,27 +46,24 @@ $current_page = basename($_SERVER['PHP_SELF']);
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
     <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;700&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;700&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
     
     <link rel="stylesheet" href="css/estilo_premium.css?v=<?php echo time(); ?>">
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <style>
         :root {
-            --azul-fuerte: #1a3c75;    /* Azul Camiseta Suplente */
-            --celeste-claro: #e3f2fd;  /* Celeste muy suave */
-            --celeste-afa: #75AADB;    /* Celeste Bandera */
+            --color-sistema: <?php echo $color_sistema; ?>;
+            --azul-fuerte: var(--color-sistema);    /* Dinámico desde la BD */
+            --celeste-claro: #e3f2fd;               /* Mantenemos el fondo de hover suave */
+            --celeste-afa: var(--color-sistema);    /* Dinámico desde la BD */
             --blanco: #ffffff;
             --negro: #212529;
             --gris-fondo: #f8f9fa;
         }
         body { background-color: var(--gris-fondo); font-family: 'Roboto', sans-serif; padding-top: 85px; padding-bottom: 40px; }
         .font-cancha, h1, h2, h3, h4, .navbar-brand { font-family: 'Oswald', sans-serif; text-transform: uppercase; letter-spacing: 0.5px; }
-        
-    
-    
-
 
         /* NAVBAR */
-        .navbar-10 { background-color: var(--blanco); border-bottom: 4px solid var(--celeste-afa); box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
+        .navbar-10 { background-color: var(--blanco); border-bottom: 1px solid var(--celeste-afa); box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
         
         /* LOGO EN NAVBAR */
         .navbar-brand { font-size: 1.5rem; color: var(--azul-fuerte) !important; font-weight: 700; display: flex; align-items: center; gap: 10px; }
@@ -126,76 +135,158 @@ $current_page = basename($_SERVER['PHP_SELF']);
                     <ul class="dropdown-menu shadow-sm">
                         <li><a class="dropdown-item" href="ventas.php"><i class="bi bi-cart4 text-success"></i> Nueva Venta</a></li>
                         <li><a class="dropdown-item" href="cierre_caja.php"><i class="bi bi-calculator"></i> Cerrar Caja</a></li>
+                        
+                        <?php if($es_admin || in_array('ver_historial_cajas', $permisos)): ?>
                         <li><a class="dropdown-item" href="historial_cajas.php"><i class="bi bi-clock-history text-primary"></i> Historial de Cajas</a></li>
-<li><a class="dropdown-item" href="historial_ventas.php"><i class="bi bi-receipt text-info"></i> Historial de Ventas</a></li>
+                        <?php endif; ?>
+                        
+                        <?php if($es_admin || in_array('ver_historial_ventas', $permisos)): ?>
+                        <li><a class="dropdown-item" href="historial_ventas.php"><i class="bi bi-receipt text-info"></i> Historial de Ventas</a></li>
+                        <?php endif; ?>
 
-                        <?php if($rol_usuario <= 2): ?>
+                        <?php if($es_admin || in_array('ver_transferencias', $permisos)): ?>
+                        <li><a class="dropdown-item" href="ver_transferencias_ia.php"><i class="bi bi-bank text-warning"></i> Transferencias (IA)</a></li>
+                        <?php endif; ?>
+
+                        <?php if($es_admin || in_array('ver_devoluciones', $permisos)): ?>
                         <li><hr class="dropdown-divider"></li>
                         <li><a class="dropdown-item" href="devoluciones.php"><i class="bi bi-arrow-counterclockwise text-danger"></i> Devoluciones</a></li>
-                        
                         <?php endif; ?>
+
                     </ul>
                 </li>
                 
-
+                <?php if($es_admin || in_array('ver_productos', $permisos) || in_array('ver_combos', $permisos) || in_array('ver_proveedores', $permisos) || in_array('ver_activos', $permisos)): ?>
                 <li class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown">INVENTARIO</a>
                     <ul class="dropdown-menu shadow-sm">
+                        <?php if($es_admin || in_array('ver_productos', $permisos)): ?>
                         <li><a class="dropdown-item" href="productos.php"><i class="bi bi-box-seam text-primary"></i> Productos</a></li>
+                        <?php endif; ?>
+
+                        <?php if($es_admin || in_array('ver_combos', $permisos)): ?>
                         <li><a class="dropdown-item" href="combos.php"><i class="bi bi-stars text-warning"></i> Pack de Oferta</a></li>
+                        <?php endif; ?>
+
+                        <?php if($es_admin || in_array('ver_productos', $permisos)): ?>
+                        <li><a class="dropdown-item" href="gestionar_taras.php"><i class="bi bi-box-seam-fill text-secondary"></i> Administrar Taras</a></li>
+                        <?php endif; ?>
+
+                        <?php if($es_admin || in_array('imprimir_etiquetas', $permisos)): ?>
                         <li><a class="dropdown-item" href="carteleria.php" target="_blank"><i class="bi bi-upc-scan"></i> Imprimir Etiquetas</a></li>
-                        <?php if($rol_usuario <= 2): ?>
+                        <?php endif; ?>
+
+                        <?php if($es_admin || in_array('ver_proveedores', $permisos) || in_array('ver_activos', $permisos)): ?>
                         <li><hr class="dropdown-divider"></li>
+                        <?php endif; ?>
+
+                        <?php if($es_admin || in_array('ver_proveedores', $permisos)): ?>
                         <li><a class="dropdown-item" href="proveedores.php"><i class="bi bi-truck"></i> Proveedores</a></li>
+                        <?php endif; ?>
+
+                        <?php if($es_admin || in_array('ver_activos', $permisos)): ?>
                         <li><a class="dropdown-item" href="bienes_uso.php"><i class="bi bi-hdd-network"></i> Activos / Bienes</a></li>
                         <?php endif; ?>
                     </ul>
                 </li>
+                <?php endif; ?>
 
+                <?php if(($es_admin || in_array('ver_clientes', $permisos)) && ($configData['modulo_clientes'] ?? 1) == 1): ?>
                 <li class="nav-item dropdown">
-                    <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown">CLUB DEL 10</a>
+                    <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown">EL CLUB</a>
                     <ul class="dropdown-menu shadow-sm">
+                        <?php if($es_admin || in_array('ver_clientes', $permisos)): ?>
                         <li><a class="dropdown-item" href="clientes.php"><i class="bi bi-people-fill text-info"></i> Clientes</a></li>
+                        <?php endif; ?>
+
+                        <?php if($es_admin || in_array('ver_canje_puntos', $permisos)): ?>
                         <li><a class="dropdown-item" href="canje_puntos.php"><i class="bi bi-gift-fill text-danger"></i> Canje de Puntos</a></li>
+                        <?php endif; ?>
+
+                        <?php if($es_admin || in_array('ver_encuestas', $permisos)): ?>
                         <li><a class="dropdown-item" href="ver_encuestas.php"><i class="bi bi-chat-quote"></i> Encuestas</a></li>
-                        <?php if($rol_usuario <= 2): ?>
+                        <?php endif; ?>
+
+                        <?php if($es_admin || in_array('ver_premios', $permisos) || in_array('cartel_qr', $permisos)): ?>
                         <li><hr class="dropdown-divider"></li>
+                        <?php endif; ?>
+
+                        <?php if($es_admin || in_array('ver_premios', $permisos)): ?>
                         <li><a class="dropdown-item" href="gestionar_premios.php"><i class="bi bi-trophy text-warning"></i> Configurar Premios</a></li>
+                        <?php endif; ?>
+
+                        <?php if($es_admin || in_array('cartel_qr', $permisos)): ?>
                         <li><a class="dropdown-item" href="cartel_qr.php" target="_blank"><i class="bi bi-qr-code"></i> Autoregistro (QR)</a></li>
                         <?php endif; ?>
                     </ul>
                 </li>
+                <?php endif; ?>
 
-                <?php if($rol_usuario <= 2): ?>
+                <?php if($es_admin || in_array('ver_gastos', $permisos) || in_array('ver_mermas', $permisos) || in_array('ver_inflacion', $permisos)): ?>
                 <li class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown">FINANZAS</a>
                     <ul class="dropdown-menu shadow-sm">
+                        <?php if($es_admin || in_array('ver_gastos', $permisos)): ?>
                         <li><a class="dropdown-item" href="gastos.php"><i class="bi bi-cash-stack text-danger"></i> Gastos</a></li>
+                        <?php endif; ?>
+
+                        <?php if($es_admin || in_array('ver_mermas', $permisos)): ?>
                         <li><a class="dropdown-item" href="mermas.php"><i class="bi bi-trash3"></i> Mermas</a></li>
+                        <?php endif; ?>
+
+                        <?php if($es_admin || in_array('ver_inflacion', $permisos)): ?>
                         <li><a class="dropdown-item" href="precios_masivos.php"><i class="bi bi-graph-up-arrow text-primary"></i> Inflación (Precios)</a></li>
+                        <?php endif; ?>
                     </ul>
                 </li>
+                <?php endif; ?>
 
+                <?php if($es_admin || in_array('ver_cupones', $permisos) || in_array('ver_sorteos', $permisos) || in_array('revista_builder', $permisos)): ?>
                 <li class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown">MARKETING</a>
                     <ul class="dropdown-menu shadow-sm">
+                        <?php if($es_admin || in_array('ver_cupones', $permisos)): ?>
                         <li><a class="dropdown-item" href="gestionar_cupones.php"><i class="bi bi-ticket-perforated text-success"></i> Cupones</a></li>
+                        <?php endif; ?>
+
+                        <?php if($es_admin || in_array('ver_sorteos', $permisos)): ?>
                         <li><a class="dropdown-item" href="sorteos.php"><i class="bi bi-ticket-detailed-fill text-danger"></i> Sorteos y Rifas</a></li>
+                        <?php endif; ?>
+
+                        <?php if($es_admin || in_array('revista_builder', $permisos)): ?>
                         <li><a class="dropdown-item" href="admin_revista.php"><i class="bi bi-newspaper"></i> Gestor Revistas</a></li>
                         <li><a class="dropdown-item" href="revista_builder.php"><i class="bi bi-magic"></i> Constructor Builder</a></li>
+                        <?php endif; ?>
+
                         <li><hr class="dropdown-divider"></li>
                         <li><a class="dropdown-item" href="tienda.php" target="_blank"><i class="bi bi-shop text-primary"></i> Ir a Tienda Online</a></li>
                     </ul>
                 </li>
+                <?php endif; ?>
 
+                <?php if($es_admin || in_array('ver_reportes', $permisos) || in_array('ver_configuracion', $permisos) || in_array('ver_usuarios', $permisos) || in_array('ver_auditoria', $permisos)): ?>
                 <li class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown">ADMIN</a>
                     <ul class="dropdown-menu shadow-sm">
+                        <?php if(($es_admin || in_array('ver_reportes', $permisos)) && ($configData['modulo_reportes'] ?? 1) == 1): ?>
                         <li><a class="dropdown-item" href="reportes.php"><i class="bi bi-bar-chart-fill text-primary"></i> Reportes</a></li>
+                        <?php endif; ?>
+
+                        <?php if($es_admin || in_array('ver_configuracion', $permisos)): ?>
                         <li><a class="dropdown-item" href="configuracion.php"><i class="bi bi-sliders"></i> Configuración Global</a></li>
+                        <?php endif; ?>
+
+                        <?php if($es_admin || in_array('ver_usuarios', $permisos)): ?>
                         <li><a class="dropdown-item" href="usuarios.php"><i class="bi bi-shield-lock"></i> Usuarios y Roles</a></li>
+                        <?php endif; ?>
+
+                        <?php if($es_admin || in_array('ver_auditoria', $permisos)): ?>
                         <li><a class="dropdown-item" href="auditoria.php"><i class="bi bi-eye text-danger"></i> Auditores / Sistema</a></li>
+                        <?php endif; ?>
+
+                        <?php if($es_admin || in_array('restaurar_sistema', $permisos)): ?>
                         <li><a class="dropdown-item" href="restaurar_sistema.php"><i class="bi bi-clock-history text-info"></i> Restaurar Backups</a></li>
+                        <?php endif; ?>
                     </ul>
                 </li>
                 <?php endif; ?>
