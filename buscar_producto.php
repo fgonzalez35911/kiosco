@@ -8,6 +8,9 @@ ob_end_clean();
 
 header('Content-Type: application/json; charset=utf-8');
 
+$conf_rubro = $conexion->query("SELECT tipo_negocio FROM configuracion WHERE id=1")->fetch(PDO::FETCH_ASSOC);
+$rubro_actual = $conf_rubro['tipo_negocio'] ?? 'kiosco';
+
 $term = $_GET['term'] ?? '';
 
 if(strlen($term) > 0) {
@@ -18,11 +21,11 @@ if(strlen($term) > 0) {
             FROM productos p 
             LEFT JOIN combos c ON p.codigo_barras = c.codigo_barras 
             WHERE (p.descripcion LIKE ? OR p.codigo_barras LIKE ?) 
-            AND p.activo = 1 
+            AND p.activo = 1 AND (p.tipo_negocio = ? OR p.tipo_negocio IS NULL)
             LIMIT 15"; // Subí a 15 para que tengas más margen
             
     $stmt = $conexion->prepare($sql);
-    $stmt->execute([$coincidencia, $coincidencia]);
+    $stmt->execute([$coincidencia, $coincidencia, $rubro_actual]);
     $productos = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     if($productos) {

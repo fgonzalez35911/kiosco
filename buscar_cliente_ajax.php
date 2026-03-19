@@ -21,6 +21,9 @@ if (!$conexion) {
     exit;
 }
 
+$conf_rubro = $conexion->query("SELECT tipo_negocio FROM configuracion WHERE id=1")->fetch(PDO::FETCH_ASSOC);
+$rubro_actual = $conf_rubro['tipo_negocio'] ?? 'kiosco';
+
 $term = $_GET['term'] ?? '';
 
 if (strlen($term) > 0) {
@@ -32,9 +35,9 @@ if (strlen($term) > 0) {
                                 (SELECT COALESCE(SUM(monto),0) FROM movimientos_cc WHERE id_cliente = clientes.id AND tipo = 'debe') - 
                                 (SELECT COALESCE(SUM(monto),0) FROM movimientos_cc WHERE id_cliente = clientes.id AND tipo = 'haber') as saldo_calculado
                                 FROM clientes 
-                                WHERE (nombre LIKE ? OR dni_cuit LIKE ?) 
+                                WHERE (nombre LIKE ? OR dni_cuit LIKE ?) AND (tipo_negocio = ? OR tipo_negocio IS NULL)
                                 LIMIT 10");
-    $stmt->execute([$like, $like]);
+    $stmt->execute([$like, $like, $rubro_actual]);
     $clientes = $stmt->fetchAll(); 
     
     // LIMPIEZA CRÍTICA: Evita que cualquier espacio o error rompa el buscador

@@ -47,8 +47,9 @@ $total = floatval($_POST['total'] ?? 0);
         throw new Exception("No tienes una caja abierta. Por favor realiza la apertura de caja."); 
     }
     $id_caja_sesion = $caja['id'];
-    $conf = $conexion->query("SELECT dinero_por_punto, redondeo_auto FROM configuracion WHERE id=1")->fetch(PDO::FETCH_ASSOC);
+    $conf = $conexion->query("SELECT dinero_por_punto, redondeo_auto, tipo_negocio FROM configuracion WHERE id=1")->fetch(PDO::FETCH_ASSOC);
     $redondeo_activo = (isset($conf['redondeo_auto']) && $conf['redondeo_auto'] == 1);
+    $rubro_actual = $conf['tipo_negocio'] ?? 'kiosco';
 
     // ---------------------------------------------------------
     // 4. VALIDACIÓN DE STOCK (PREVIA A LA VENTA)
@@ -164,22 +165,42 @@ $total = floatval($_POST['total'] ?? 0);
     $total = redondearVenta($total, $redondeo_activo);
     $fecha_actual = date('Y-m-d H:i:s');
     
-    $sql = "INSERT INTO ventas (id_caja_sesion, id_usuario, id_cliente, total, metodo_pago, fecha, estado, descuento_monto_cupon, descuento_manual, codigo_cupon) 
-            VALUES (?, ?, ?, ?, ?, ?, 'completada', ?, ?, ?)";
+    // Recepción del estado y vinculación de la IA
+    $estado_venta = $_POST['estado_venta'] ?? 'completada';
+    $id_transferencia = $_POST['id_transferencia'] ?? null;
+
+    $sql = "INSERT INTO ventas (id_caja_sesion, id_usuario, id_cliente, total, metodo_pago, fecha, estado, descuento_monto_cupon, descuento_manual, codigo_cupon, tipo_negocio) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
     $stmt = $conexion->prepare($sql);
-    $stmt->execute([$id_caja_sesion, $user_id, $id_cliente, $total, $metodo_pago, $fecha_actual, $desc_cupon_monto, $desc_manual_monto, $cupon_codigo]);
+    $stmt->execute([$id_caja_sesion, $user_id, $id_cliente, $total, $metodo_pago, $fecha_actual, $estado_venta, $desc_cupon_monto, $desc_manual_monto, $cupon_codigo, $rubro_actual]);
     
     $venta_id = $conexion->lastInsertId();
+
+    // Vincular la transferencia con la venta y marcarla como pendiente o completada
+    if (!empty($id_transferencia)) {
+        $stmtTr = $conexion->prepare("SELECT datos_json FROM transferencias WHERE id = ?");
+        $stmtTr->execute([$id_transferencia]);
+        $trData = $stmtTr->fetch(PDO::FETCH_ASSOC);
+        if ($trData) {
+            $jsonTr = json_decode($trData['datos_json'], true);
+            $jsonTr['estado'] = ($estado_venta === 'pendiente_transferencia') ? 'pendiente' : 'completada';
+            $jsonTr['id_venta'] = $venta_id;
+            // Guardamos el total y la caja para que aparezca en el listado y se pueda aprobar luego
+            $jsonTr['total_venta'] = $total;
+            $jsonTr['id_caja'] = $id_caja_sesion;
+            $conexion->prepare("UPDATE transferencias SET datos_json = ? WHERE id = ?")->execute([json_encode($jsonTr, JSON_UNESCAPED_UNICODE), $id_transferencia]);
+        }
+    }
 
     // ---------------------------------------------------------
     // 6. DETALLES Y DESCUENTO DE STOCK REAL
     // ---------------------------------------------------------
-    $sqlDetalle = "INSERT INTO detalle_ventas (id_venta, id_producto, cantidad, precio_historico, subtotal) VALUES (?, ?, ?, ?, ?)";
+    $sqlDetalle = "INSERT INTO detalle_ventas (id_venta, id_producto, cantidad, precio_historico, subtotal, tipo_negocio) VALUES (?, ?, ?, ?, ?, ?)";
     $stmtDetalle = $conexion->prepare($sqlDetalle);
 
     foreach($items as $item) {
         $subtotal = $item['precio'] * $item['cantidad'];
-        $stmtDetalle->execute([$venta_id, $item['id'], $item['cantidad'], $item['precio'], $subtotal]);
+        $stmtDetalle->execute([$venta_id, $item['id'], floatval($item['cantidad']), $item['precio'], $subtotal, $rubro_actual]);
 
         // Verificamos tipo nuevamente para estar seguros
         $stmtTipo = $conexion->prepare("SELECT tipo, codigo_barras, descripcion FROM productos WHERE id = ?");
@@ -227,26 +248,26 @@ $total = floatval($_POST['total'] ?? 0);
 
         } else {
             // Producto Normal
-            $conexion->prepare("UPDATE productos SET stock_actual = stock_actual - ? WHERE id = ?")->execute([$item['cantidad'], $item['id']]);
+            $conexion->prepare("UPDATE productos SET stock_actual = stock_actual - ? WHERE id = ?")->execute([floatval($item['cantidad']), $item['id']]);
         }
     }
 
     // ---------------------------------------------------------
     // 7. PAGOS MIXTOS / CTA CTE / PUNTOS (Igual que antes)
     // ---------------------------------------------------------
-    if($metodo === 'Mixto' && !empty($pagos_mixtos)) {
-        $stmtMix = $conexion->prepare("INSERT INTO pagos_ventas (id_venta, metodo_pago, monto) VALUES (?, ?, ?)");
+    if($metodo_pago === 'Mixto' && !empty($pagos_mixtos)) {
+        $stmtMix = $conexion->prepare("INSERT INTO pagos_ventas (id_venta, metodo_pago, monto, tipo_negocio) VALUES (?, ?, ?, ?)");
         if (is_string($pagos_mixtos)) $pagos_mixtos = json_decode($pagos_mixtos, true);
         foreach($pagos_mixtos as $metodo_nombre => $monto) {
-            if($monto > 0) $stmtMix->execute([$venta_id, $metodo_nombre, $monto]);
+            if($monto > 0) $stmtMix->execute([$venta_id, $metodo_nombre, $monto, $rubro_actual]);
         }
     }
 
     if ($id_cliente > 1) { 
-        if ($metodo === 'CtaCorriente') {
+        if ($metodo_pago === 'CtaCorriente') {
             $monto_a_deber = $total - $saldo_favor_usado; 
             if($monto_a_deber > 0) {
-                 $conexion->prepare("INSERT INTO movimientos_cc (id_cliente, id_venta, id_usuario, tipo, monto, descripcion, fecha) VALUES (?, ?, ?, 'debe', ?, 'Compra Fiado Ticket #$venta_id', ?)")->execute([$id_cliente, $venta_id, $user_id, $monto_a_deber, $fecha_actual]);
+                 $conexion->prepare("INSERT INTO movimientos_cc (id_cliente, id_venta, id_usuario, tipo, monto, descripcion, fecha, tipo_negocio) VALUES (?, ?, ?, 'debe', ?, 'Compra Fiado Ticket #$venta_id', ?, ?)")->execute([$id_cliente, $venta_id, $user_id, $monto_a_deber, $fecha_actual, $rubro_actual]);
             }
         }
         
@@ -261,7 +282,7 @@ $total = floatval($_POST['total'] ?? 0);
         
         if ($saldo_favor_usado > 0) {
             $conexion->prepare("UPDATE clientes SET saldo_favor = saldo_favor - ? WHERE id = ?")->execute([$saldo_favor_usado, $id_cliente]);
-            $conexion->prepare("INSERT INTO movimientos_cc (id_cliente, id_venta, id_usuario, tipo, monto, descripcion, fecha) VALUES (?, ?, ?, 'haber', ?, 'Uso Saldo a Favor', ?)")->execute([$id_cliente, $venta_id, $user_id, $saldo_favor_usado * -1, $fecha_actual]);
+            $conexion->prepare("INSERT INTO movimientos_cc (id_cliente, id_venta, id_usuario, tipo, monto, descripcion, fecha, tipo_negocio) VALUES (?, ?, ?, 'haber', ?, 'Uso Saldo a Favor', ?, ?)")->execute([$id_cliente, $venta_id, $user_id, $saldo_favor_usado * -1, $fecha_actual, $rubro_actual]);
         }
 
                 if ($pago_deuda > 0) {
@@ -280,7 +301,7 @@ $total = floatval($_POST['total'] ?? 0);
     // Auditoría
     $detalles_audit = "Venta #$venta_id | Total: $$total | Cliente ID: $id_cliente";
     if($desc_manual_monto > 0) $detalles_audit .= " | Desc.Manual: $$desc_manual_monto";
-    $conexion->prepare("INSERT INTO auditoria (fecha, id_usuario, accion, detalles) VALUES (?, ?, 'VENTA_REALIZADA', ?)")->execute([$fecha_actual, $user_id, $detalles_audit]);
+    $conexion->prepare("INSERT INTO auditoria (fecha, id_usuario, accion, detalles, tipo_negocio) VALUES (?, ?, 'VENTA_REALIZADA', ?, ?)")->execute([$fecha_actual, $user_id, $detalles_audit, $rubro_actual]);
 
     $conexion->commit();
     echo json_encode(['status' => 'success', 'id_venta' => $venta_id, 'msg' => 'Venta procesada correctamente']);

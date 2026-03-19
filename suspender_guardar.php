@@ -28,7 +28,8 @@ try {
         $subtotal = $prod['precio'] * $prod['cantidad'];
         $stmtItem->execute([$id_sus, $prod['id'], $prod['cantidad'], $prod['precio'], $subtotal]);
     }
-    
+    $detalles_audit = "Venta dejada en espera. Ref: " . $nombre_ref . " | Total: $" . $total;
+    $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'ESPERA', ?, NOW())")->execute([$usuario, $detalles_audit]);
     $conexion->commit();
     echo json_encode(['status'=>'success']);
 } catch (Exception $e) {

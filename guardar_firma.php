@@ -27,16 +27,9 @@ if (!file_exists($directorio)) {
     mkdir($directorio, 0777, true);
 }
 
-// LÓGICA DE NOMBRE:
-// Si es SuperAdmin (Rol 1) o Dueño (Rol 2), guardamos como "firma_admin.png" para que salga a la derecha.
-// Si es Empleado (Rol 3), guardamos como "usuario_ID.png" para que salga a la izquierda.
-// (Esto sobreescribe la firma anterior si ya existe, lo cual es correcto)
-
-if ($rol <= 2) {
-    $archivo = $directorio . 'firma_admin.png';
-} else {
-    $archivo = $directorio . 'usuario_' . $id_usuario . '.png';
-}
+// LÓGICA DE NOMBRE AISLADA:
+// Ahora TODOS guardan su firma por su ID único, así no se pisan entre Dueño y Admin.
+$archivo = $directorio . 'usuario_' . $id_usuario . '.png';
 
 // 3. Guardar el archivo
 if (file_put_contents($archivo, $data)) {

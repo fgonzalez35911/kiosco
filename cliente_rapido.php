@@ -3,43 +3,39 @@ session_start();
 require_once '../includes/db.php';
 header('Content-Type: application/json');
 
-if (!isset($_SESSION['usuario_id'])) { die(json_encode(['status' => 'error', 'msg' => 'Sesión expirada'])); }
-
-$nombre = trim($_POST['nombre']);
-$dni = trim($_POST['dni']);
-$email = trim($_POST['email']);
-$user_sug = trim($_POST['usuario_form'] ?? '');
-$telefono = trim($_POST['telefono'] ?? '');
-$fecha_nac = !empty($_POST['fecha_nacimiento']) ? $_POST['fecha_nacimiento'] : null;
-$direccion = trim($_POST['direccion'] ?? '');
-$limite = floatval($_POST['limite'] ?? 0);
-
-// Validación estricta: Los 3 pilares obligatorios
-if (empty($nombre) || empty($dni) || empty($email)) { 
-    die(json_encode(['status' => 'error', 'msg' => 'Nombre, DNI y Email son obligatorios'])); 
+if (!isset($_SESSION['usuario_id'])) {
+    echo json_encode(['status' => 'error', 'msg' => 'Sesión expirada']);
+    exit;
 }
 
-try {
-    // Sincronización con estructura de 20 campos
-    $sql = "INSERT INTO clientes (nombre, dni, dni_cuit, email, usuario, telefono, whatsapp, fecha_nacimiento, direccion, limite_credito, fecha_registro) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())";
+if ($_SERVER['REQUEST_METHOD'] == 'POST') {
+    $nombre = trim($_POST['nombre'] ?? '');
     
-    $stmt = $conexion->prepare($sql);
-    // Guardamos DNI en ambos campos para búsqueda y vinculamos Teléfono/WhatsApp
-    $stmt->execute([$nombre, $dni, $dni, $email, $user_sug, $telefono, $telefono, $fecha_nac, $direccion, $limite]);
-    $nuevo_id = $conexion->lastInsertId();
-    
-    echo json_encode([
-        'status' => 'success', 
-        'id' => $nuevo_id, 
-        'nombre' => $nombre, 
-        'puntos' => 0, 
-        'saldo' => 0
-    ]);
-} catch (Exception $e) {
-    // Capturamos si el error es por duplicado (DNI, Email o Usuario)
-    $errorMsg = (strpos($e->getMessage(), 'Duplicate entry') !== false) 
-                ? "El DNI, Email o Usuario ya están registrados." 
-                : "Error en base de datos: " . $e->getMessage();
-    echo json_encode(['status' => 'error', 'msg' => $errorMsg]);
+    // EL TRUCO: Si vienen vacíos, se convierten en NULL para que MySQL no bloquee por UNIQUE KEY
+    $email = !empty(trim($_POST['email'] ?? '')) ? trim($_POST['email']) : null;
+    $dni = !empty(trim($_POST['dni'] ?? '')) ? trim($_POST['dni']) : null;
+    $usuario = !empty(trim($_POST['usuario'] ?? '')) ? trim($_POST['usuario']) : null;
+    $whatsapp = !empty(trim($_POST['whatsapp'] ?? '')) ? trim($_POST['whatsapp']) : null;
+
+    if (empty($nombre)) {
+        echo json_encode(['status' => 'error', 'msg' => 'El nombre es obligatorio.']);
+        exit;
+    }
+
+    $conf_rubro = $conexion->query("SELECT tipo_negocio FROM configuracion WHERE id=1")->fetch(PDO::FETCH_ASSOC);
+    $rubro_actual = $conf_rubro['tipo_negocio'] ?? 'kiosco';
+
+    try {
+        $sql = "INSERT INTO clientes (nombre, dni, dni_cuit, telefono, whatsapp, email, usuario, fecha_registro, saldo_deudor, puntos_acumulados, limite_credito, tipo_negocio) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), 0, 0, 0, ?)";
+        $stmt = $conexion->prepare($sql);
+        $stmt->execute([$nombre, $dni, $dni, $whatsapp, $whatsapp, $email, $usuario, $rubro_actual]);
+        
+        $id = $conexion->lastInsertId();
+
+        echo json_encode(['status' => 'success', 'id' => $id, 'nombre' => $nombre]);
+    } catch (Exception $e) {
+        echo json_encode(['status' => 'error', 'msg' => 'Error BD: ' . $e->getMessage()]);
+    }
 }
+?>
