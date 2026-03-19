@@ -1,5 +1,5 @@
 <?php
-// reporte_gastos.php - VERSIÓN VANGUARD PRO (FLUJO NATIVO + GRÁFICOS)
+// reporte_cajas.php - VERSIÓN VANGUARD PRO (CON GRÁFICOS EJECUTIVOS)
 session_start();
 $es_publico = isset($_GET['publico']) && $_GET['publico'] == '1';
 if (!isset($_SESSION['usuario_id']) && !$es_publico) { header("Location: index.php"); exit; }
@@ -13,15 +13,13 @@ try {
         'logo' => $conf['logo_url'] ?? '',
         'cuit' => $conf['cuit'] ?? 'S/D'
     ];
-    
-    // 1. Datos del Operador
+
     $id_operador = $_SESSION['usuario_id'] ?? ($_GET['gen_by'] ?? 1);
     $u_op = $conexion->prepare("SELECT usuario FROM usuarios WHERE id = ?");
     $u_op->execute([$id_operador]);
     $operadorRow = $u_op->fetch(PDO::FETCH_ASSOC);
     $usuario_actual = strtoupper($operadorRow['usuario'] ?? 'S/D');
 
-    // 2. Datos del Dueño para Firma
     $u_owner = $conexion->query("SELECT u.id, u.nombre_completo, r.nombre as nombre_rol 
                                  FROM usuarios u 
                                  JOIN roles r ON u.id_rol = r.id 
@@ -29,7 +27,6 @@ try {
     $ownerRow = $u_owner->fetch(PDO::FETCH_ASSOC);
     $firmante = $ownerRow ? $ownerRow : ['nombre_completo' => 'RESPONSABLE', 'nombre_rol' => 'AUTORIZADO', 'id' => 0];
 
-    // 3. Firma en Base64
     $firmaUsuario = ""; 
     if($ownerRow && file_exists("img/firmas/usuario_{$ownerRow['id']}.png")) {
         $firmaUsuario = 'data:image/png;base64,' . base64_encode(file_get_contents("img/firmas/usuario_{$ownerRow['id']}.png"));
@@ -39,69 +36,64 @@ try {
 
     $desde = $_GET['desde'] ?? date('Y-m-d', strtotime('-2 months'));
     $hasta = $_GET['hasta'] ?? date('Y-m-d');
-    $f_cat = $_GET['categoria_filtro'] ?? '';
-    $f_usu = $_GET['id_usuario'] ?? '';
-    $buscar = trim($_GET['buscar'] ?? '');
+    $f_cliente = $_GET['id_cliente'] ?? '';
+    $f_usuario = $_GET['id_usuario'] ?? '';
+    $buscar = $_GET['buscar'] ?? '';
 
-    $condG = ["DATE(g.fecha) >= ?", "DATE(g.fecha) <= ?"];
-    $paramsG = [$desde, $hasta];
-    if($f_cat !== '' && $f_cat !== 'Mermas') { $condG[] = "g.categoria = ?"; $paramsG[] = $f_cat; }
-    if($f_usu !== '') { $condG[] = "g.id_usuario = ?"; $paramsG[] = $f_usu; }
-    if(!empty($buscar)) { $condG[] = "(g.descripcion LIKE ? OR g.id = ?)"; array_push($paramsG, "%$buscar%", intval($buscar)); }
+    $condiciones = ["DATE(c.fecha_apertura) >= ?", "DATE(c.fecha_apertura) <= ?"];
+    $parametros = [$desde, $hasta];
 
-    $condM = ["DATE(m.fecha) >= ?", "DATE(m.fecha) <= ?", "m.motivo NOT LIKE 'Devolución #%'"];
-    $paramsM = [$desde, $hasta];
-    if($f_usu !== '') { $condM[] = "m.id_usuario = ?"; $paramsM[] = $f_usu; }
-    if($f_cat !== '' && $f_cat !== 'Mermas') { $condM[] = "1=0"; } 
-    if(!empty($buscar)) { $condM[] = "(m.motivo LIKE ? OR m.id = ?)"; array_push($paramsM, "%$buscar%", intval($buscar)); }
-
-    // Consulta unificada de Egresos
-    $sql = "(SELECT g.id, g.monto, g.categoria, g.fecha, g.descripcion, u.usuario, 'gasto' as tipo
-             FROM gastos g JOIN usuarios u ON g.id_usuario = u.id 
-             WHERE " . implode(" AND ", $condG) . ")
-            UNION 
-            (SELECT m.id, (m.cantidad * p.precio_costo) as monto, 'Mermas' as categoria, m.fecha, m.motivo as descripcion, u.usuario, 'merma' as tipo
-             FROM mermas m 
-             JOIN usuarios u ON m.id_usuario = u.id 
-             JOIN productos p ON m.id_producto = p.id
-             WHERE " . implode(" AND ", $condM) . ")
-            ORDER BY fecha DESC";
-
-    $stmt = $conexion->prepare($sql);
-    $stmt->execute(array_merge($paramsG, $paramsM));
-    $registros = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    $rango_texto = ($desde == $hasta) ? date('d/m/Y', strtotime($desde)) : date('d/m/Y', strtotime($desde)) . " al " . date('d/m/Y', strtotime($hasta));
-    
-    // --- CÁLCULOS DE RESUMEN EJECUTIVO Y GRÁFICOS ---
-    $totalEgresos = 0;
-    $gastos_categoria = [];
-    $gastos_operador = [];
-
-    foreach($registros as $r) {
-        $monto = floatval($r['monto']);
-        $totalEgresos += $monto;
-
-        // Para gráfico circular (Categorías)
-        $cat = strtoupper($r['categoria']);
-        if(!isset($gastos_categoria[$cat])) { $gastos_categoria[$cat] = 0; }
-        $gastos_categoria[$cat] += $monto;
-
-        // Para gráfico de barras (Operadores)
-        $usu = strtoupper($r['usuario']);
-        if(!isset($gastos_operador[$usu])) { $gastos_operador[$usu] = 0; }
-        $gastos_operador[$usu] += $monto;
+    if (!empty($buscar)) {
+        if (is_numeric($buscar)) {
+            $condiciones[] = "c.id = ?";
+            $parametros[] = intval($buscar);
+        } else {
+            $condiciones[] = "u.usuario LIKE ?";
+            $parametros[] = "%$buscar%";
+        }
     }
-    arsort($gastos_categoria);
-    arsort($gastos_operador);
+    if ($f_cliente !== '') { 
+        $condiciones[] = "EXISTS (SELECT 1 FROM ventas v WHERE v.id_caja_sesion = c.id AND v.id_cliente = ?)"; 
+        $parametros[] = $f_cliente; 
+    }
+    if ($f_usuario !== '') { $condiciones[] = "c.id_usuario = ?"; $parametros[] = $f_usuario; }
 
+    $sql = "SELECT c.*, u.usuario FROM cajas_sesion c JOIN usuarios u ON c.id_usuario = u.id WHERE " . implode(" AND ", $condiciones) . " ORDER BY c.id ASC";
+    $stmt = $conexion->prepare($sql);
+    $stmt->execute($parametros);
+    $cajas = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // --- CÁLCULOS DE TOTALES Y GRÁFICOS ---
+    $totalVentas = 0; 
+    $totalDiferencia = 0;
+    $ventas_operador = [];
+    $estado_cajas = ['Exactas' => 0, 'Sobrantes' => 0, 'Faltantes' => 0];
+
+    foreach($cajas as $c) { 
+        if($c['estado'] != 'abierta') {
+            $totalVentas += floatval($c['total_ventas']); 
+            $totalDiferencia += floatval($c['diferencia']);
+
+            // Data para el gráfico de barras
+            $usu = strtoupper($c['usuario']);
+            if(!isset($ventas_operador[$usu])) { $ventas_operador[$usu] = 0; }
+            $ventas_operador[$usu] += floatval($c['total_ventas']);
+
+            // Data para el gráfico de dona
+            $dif = floatval($c['diferencia']);
+            if($dif == 0) { $estado_cajas['Exactas']++; }
+            elseif($dif > 0) { $estado_cajas['Sobrantes']++; }
+            else { $estado_cajas['Faltantes']++; }
+        }
+    }
+    arsort($ventas_operador); // Ordenamos quién vendió más
+    
+    $rango_texto = ($desde == $hasta) ? date('d/m/Y', strtotime($desde)) : date('d/m/Y', strtotime($desde)) . " al " . date('d/m/Y', strtotime($hasta));
     $url_actual = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[REQUEST_URI]";
     if (strpos($url_actual, 'publico=1') === false) {
         $separador = parse_url($url_actual, PHP_URL_QUERY) ? '&' : '?';
         $url_publica = $url_actual . $separador . 'publico=1&gen_by=' . $id_operador;
-    } else {
-        $url_publica = $url_actual;
-    }
+    } else { $url_publica = $url_actual; }
     $qr_url = "https://api.qrserver.com/v1/create-qr-code/?size=150x150&margin=0&data=" . urlencode($url_publica);
 
 } catch (Exception $e) { die("Error: " . $e->getMessage()); }
@@ -110,7 +102,7 @@ try {
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Reporte Gastos - Vanguard Pro</title>
+    <title>Reporte Cajas - Vanguard Pro</title>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
     
@@ -122,17 +114,15 @@ try {
     <style>
         body { font-family: 'Roboto', sans-serif; background: #f0f0f0; margin: 0; padding: 20px; color: #333; }
         .report-page { background: white; width: 100%; max-width: 210mm; margin: 0 auto; padding: 20px; box-sizing: border-box; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
-        
         header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #102A57; padding-bottom: 10px; margin-bottom: 20px; }
         .empresa-info h1 { margin: 0; font-size: 16pt; color: #102A57; text-transform: uppercase; font-weight: 900; }
         
-        /* ESTRUCTURA NATIVA PARA EVITAR CORTES DE TABLA */
         table { width: 100%; border-collapse: collapse; margin-bottom: 15px; table-layout: fixed; }
         th { background: #102A57; color: white !important; padding: 10px; text-align: left; font-size: 9pt; white-space: nowrap; }
         td { border-bottom: 1px solid #eee; padding: 10px; font-size: 8.5pt; vertical-align: top; word-wrap: break-word; }
         
-        thead { display: table-header-group; } 
-        .evitar-corte { page-break-inside: avoid; } 
+        thead { display: table-header-group; }
+        .evitar-corte { page-break-inside: avoid; }
 
         .resumen-card { background: #f8f9fa; border: 1px solid #ddd; padding: 15px; border-radius: 8px; }
         .footer-section { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee; }
@@ -143,7 +133,6 @@ try {
         .no-print { position: fixed; bottom: 20px; right: 20px; z-index: 9999; display: flex; gap: 10px; }
         .btn-descargar { background: #dc3545; color: white; padding: 15px 25px; border-radius: 50px; border: none; cursor: pointer; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.3); font-size: 14px; }
         .btn-compartir { background: #102A57; color: white; padding: 15px 25px; border-radius: 50px; border: none; cursor: pointer; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.3); font-size: 14px; }
-
         @media screen { .report-page { margin-bottom: 30px; } }
     </style>
 </head>
@@ -158,7 +147,7 @@ try {
         <table>
             <thead>
                 <tr>
-                    <td colspan="4" style="border:none; padding:0; background:white;">
+                    <td colspan="5" style="border:none; padding:0; background:white;">
                         <header>
                             <div style="width: 20%; text-align: left;">
                                 <?php if(!empty($negocio['logo'])): ?>
@@ -171,65 +160,71 @@ try {
                                 <p style="font-size: 9pt; margin: 0;"><strong>CUIT: <?php echo $negocio['cuit']; ?></strong></p>
                             </div>
                             <div style="text-align: right; width: 30%; font-size: 8pt; color: #333; font-weight: normal;">
-                                <strong>REPORTE DE EGRESOS</strong><br><?php echo $rango_texto; ?><br>
+                                <strong>AUDITORÍA DE CAJAS</strong><br><?php echo $rango_texto; ?><br>
                                 <strong style="color:#102A57;">EMISIÓN: <?php echo date('d/m/Y H:i'); ?></strong>
                             </div>
                         </header>
                         <h3 style="color: #102A57; border-left: 5px solid #102A57; padding-left: 10px; margin-bottom: 20px; margin-top:0; text-transform: uppercase; font-size: 11pt;">
-                            Detalle de Gastos y Mermas
+                            Detalle de Sesiones
                         </h3>
                     </td>
                 </tr>
                 <tr>
-                    <th style="width: 15%;">FECHA</th>
-                    <th style="width: 45%;">CONCEPTO / OPERADOR</th>
-                    <th style="width: 20%;">CATEGORÍA</th>
-                    <th style="width: 20%; text-align: right;">MONTO</th>
+                    <th style="width: 25%;">SESIÓN / OPERADOR</th>
+                    <th style="width: 20%;">APERTURA</th>
+                    <th style="width: 20%;">CIERRE</th>
+                    <th style="width: 15%; text-align: right;">VENTAS</th>
+                    <th style="width: 20%; text-align: right;">DIFERENCIA</th>
                 </tr>
             </thead>
             
             <tbody>
-                <?php if(count($registros) > 0): ?>
-                    <?php foreach($registros as $r): ?>
+                <?php if(count($cajas) > 0): ?>
+                    <?php foreach($cajas as $c): 
+                        $es_abierta = ($c['estado'] == 'abierta');
+                        $dif = floatval($c['diferencia']);
+                    ?>
                     <tr class="evitar-corte">
-                        <td><?php echo date('d/m/y H:i', strtotime($r['fecha'])); ?></td>
-                        <td><strong><?php echo strtoupper($r['descripcion']); ?></strong><br><small style="color:#666;">Operador: <?php echo strtoupper($r['usuario']); ?></small></td>
-                        <td>
-                            <?php if($r['categoria'] == 'Mermas'): ?>
-                                <span style="background: #f8d7da; color:#dc3545; padding: 2px 6px; border-radius: 4px; font-size: 8pt; font-weight: bold;">MERMA</span>
-                            <?php else: ?>
-                                <span style="background: #eee; padding: 2px 6px; border-radius: 4px; font-size: 8pt; font-weight: bold;"><?php echo strtoupper($r['categoria']); ?></span>
-                            <?php endif; ?>
+                        <td><strong>CJ-<?php echo str_pad($c['id'], 6, '0', STR_PAD_LEFT); ?></strong><br><small style="color:#666; font-weight:bold;"><?php echo strtoupper($c['usuario']); ?></small></td>
+                        <td><?php echo date('d/m/y H:i', strtotime($c['fecha_apertura'])); ?> hs</td>
+                        <td><?php echo $es_abierta ? '<span style="color:#dc3545; font-weight:bold;">ABIERTA</span>' : date('d/m/y H:i', strtotime($c['fecha_cierre'])) . ' hs'; ?></td>
+                        <td style="text-align: right; font-weight: bold; color: #198754;">$<?php echo number_format($c['total_ventas'], 2, ',', '.'); ?></td>
+                        <td style="text-align: right; font-weight: bold; color: <?php echo ($dif < 0) ? '#dc3545' : ($dif > 0 ? '#198754' : '#333'); ?>;">
+                            <?php echo $es_abierta ? '-' : '$' . number_format($dif, 2, ',', '.'); ?>
                         </td>
-                        <td style="text-align: right; font-weight: bold; color:#dc3545;">-$<?php echo number_format($r['monto'], 2, ',', '.'); ?></td>
                     </tr>
                     <?php endforeach; ?>
                     
                     <tr class="evitar-corte">
-                        <td colspan="4" style="text-align: center; padding: 40px 20px; color: #a0a0a0; border-top: 2px dashed #e0e0e0;">
-                            <i class="bi bi-wallet2" style="font-size: 28pt; display: block; margin-bottom: 10px; color: #d0d0d0;"></i>
-                            <span style="font-size: 10pt; font-weight: bold; text-transform: uppercase; letter-spacing: 2px;">Fin de Registros de Egresos</span>
+                        <td colspan="5" style="text-align: center; padding: 40px 20px; color: #a0a0a0; border-top: 2px dashed #e0e0e0;">
+                            <i class="bi bi-inboxes" style="font-size: 28pt; display: block; margin-bottom: 10px; color: #d0d0d0;"></i>
+                            <span style="font-size: 10pt; font-weight: bold; text-transform: uppercase; letter-spacing: 2px;">Fin de Registros de Caja</span>
                         </td>
                     </tr>
                 <?php else: ?>
-                    <tr><td colspan="4" style="text-align:center; padding: 30px; color:#666;">No hubo egresos en este periodo.</td></tr>
+                    <tr><td colspan="5" style="text-align:center; padding: 30px; color:#666;">No se encontraron registros de caja en este periodo.</td></tr>
                 <?php endif; ?>
             </tbody>
         </table>
 
-        <?php if(count($registros) > 0): ?>
+        <?php if(count($cajas) > 0): ?>
         <div class="evitar-corte" style="margin-top: 30px;">
             <div class="resumen-card">
-                <h4 style="color: #102A57; border-bottom: 2px solid #102A57; padding-bottom: 5px; margin-bottom: 15px; margin-top:0; text-transform: uppercase; font-size: 11pt;">Resumen Ejecutivo de Egresos</h4>
+                <h4 style="color: #102A57; border-bottom: 2px solid #102A57; padding-bottom: 5px; margin-bottom: 15px; margin-top:0; text-transform: uppercase; font-size: 11pt;">Resumen de Totales Consolidados</h4>
                 
                 <div style="display: flex; gap: 20px; margin-bottom: 20px;">
-                    <div style="flex: 1; background: white; padding: 10px; border-radius: 5px; border: 1px solid #ddd; text-align: center;">
-                        <small style="color: #666; font-weight: bold; text-transform: uppercase; font-size: 7pt;">Movimientos Totales</small>
-                        <div style="font-size: 16pt; font-weight: 900; color: #102A57;"><?php echo count($registros); ?></div>
+                    <div style="flex: 1; background: white; padding: 15px; border-radius: 5px; border: 1px solid #ddd; text-align: center;">
+                        <small style="color: #666; font-weight: bold; text-transform: uppercase; font-size: 7pt;">Total Ventas (Cajas Cerradas)</small>
+                        <div style="font-size: 16pt; font-weight: 900; color: #198754;">$<?php echo number_format($totalVentas, 2, ',', '.'); ?></div>
                     </div>
-                    <div style="flex: 1; background: #fdf2f2; padding: 10px; border-radius: 5px; border: 1px solid #dc3545; text-align: center;">
-                        <small style="color: #dc3545; font-weight: bold; text-transform: uppercase; font-size: 7pt;">Egreso Bruto Consolidado</small>
-                        <div style="font-size: 16pt; font-weight: 900; color: #dc3545;">-$<?php echo number_format($totalEgresos, 2, ',', '.'); ?></div>
+                    <?php 
+                        $bgDif = ($totalDiferencia < 0) ? '#f8d7da' : ($totalDiferencia > 0 ? '#e8fdf2' : 'white');
+                        $borderDif = ($totalDiferencia < 0) ? '#dc3545' : ($totalDiferencia > 0 ? '#198754' : '#ddd');
+                        $colorDif = ($totalDiferencia < 0) ? '#dc3545' : ($totalDiferencia > 0 ? '#198754' : '#333');
+                    ?>
+                    <div style="flex: 1; background: <?php echo $bgDif; ?>; padding: 15px; border-radius: 5px; border: 1px solid <?php echo $borderDif; ?>; text-align: center;">
+                        <small style="color: <?php echo $colorDif; ?>; font-weight: bold; text-transform: uppercase; font-size: 7pt;">Diferencia Neta Acumulada</small>
+                        <div style="font-size: 16pt; font-weight: 900; color: <?php echo $colorDif; ?>;">$<?php echo number_format($totalDiferencia, 2, ',', '.'); ?></div>
                     </div>
                 </div>
 
@@ -237,24 +232,24 @@ try {
                 
                 <div style="display: flex; justify-content: space-between; gap: 15px; width: 100%; box-sizing: border-box;">
                     <div style="flex: 1; background: white; padding: 15px; border-radius: 5px; border: 1px solid #ddd; box-sizing: border-box;">
-                        <strong style="font-size: 8pt; color: #666; text-transform: uppercase; display:block; text-align:center; margin-bottom:10px;">Egresos por Operador ($)</strong>
+                        <strong style="font-size: 8pt; color: #666; text-transform: uppercase; display:block; text-align:center; margin-bottom:10px;">Ventas por Operador ($)</strong>
                         <div style="position: relative; height: 220px; width: 100%;"><canvas id="chartOperador"></canvas></div>
                     </div>
                     <div style="flex: 1; background: white; padding: 15px; border-radius: 5px; border: 1px solid #ddd; box-sizing: border-box;">
-                        <strong style="font-size: 8pt; color: #666; text-transform: uppercase; display:block; text-align:center; margin-bottom:10px;">Distribución de Gastos</strong>
-                        <div style="position: relative; height: 220px; width: 100%;"><canvas id="chartCategoria"></canvas></div>
+                        <strong style="font-size: 8pt; color: #666; text-transform: uppercase; display:block; text-align:center; margin-bottom:10px;">Rendimiento de Cierres</strong>
+                        <div style="position: relative; height: 220px; width: 100%;"><canvas id="chartEstado"></canvas></div>
                     </div>
                 </div>
             </div>
             
             <script> 
-                const datosOperador = <?php echo json_encode($gastos_operador); ?>; 
-                const datosCategoria = <?php echo json_encode($gastos_categoria); ?>; 
+                const datosOperador = <?php echo json_encode($ventas_operador); ?>; 
+                const datosEstado = <?php echo json_encode($estado_cajas); ?>; 
             </script>
 
             <div class="footer-section">
                 <div style="width: 40%; font-size: 8pt; color: #666; line-height: 1.4; text-align: justify;">
-                    <p><strong>DECLARACIÓN JURADA:</strong> Este reporte refleja fielmente las salidas de dinero (gastos) y el costo asociado a las mermas de inventario registradas en el sistema.</p>
+                    <p><strong>DECLARACIÓN JURADA:</strong> Este reporte refleja fielmente las sesiones de caja registradas en el sistema. Las cajas actualmente abiertas no se incluyen en los totales consolidados ni en los gráficos.</p>
                 </div>
                 <div style="width: 30%; text-align: center;">
                     <img src="<?php echo $qr_url; ?>" style="width: 75px; height: 75px; border: 1px solid #ccc; padding: 2px;">
@@ -278,7 +273,6 @@ try {
 
     <script>
     document.addEventListener("DOMContentLoaded", function() {
-        // Gráfico de Barras: Operadores
         if(typeof datosOperador !== 'undefined' && Object.keys(datosOperador).length > 0) {
             const allLabelsOp = Object.keys(datosOperador);
             const labelsOp = allLabelsOp.slice(0, 6).map(l => l.length > 13 ? l.substring(0, 13) + '...' : l);
@@ -290,9 +284,9 @@ try {
                     data: { 
                         labels: labelsOp, 
                         datasets: [{ 
-                            label: 'Egresos ($)', 
+                            label: 'Ventas ($)', 
                             data: dataOp, 
-                            backgroundColor: '#dc3545', 
+                            backgroundColor: '#102A57', 
                             borderRadius: 4,
                             maxBarThickness: 35 
                         }] 
@@ -310,20 +304,20 @@ try {
             }
         }
 
-        // Gráfico Circular: Categorías
-        if(typeof datosCategoria !== 'undefined' && Object.keys(datosCategoria).length > 0) {
-            const allLabelsCat = Object.keys(datosCategoria);
-            const labelsCat = allLabelsCat.slice(0, 6).map(l => l.length > 15 ? l.substring(0, 15) + '...' : l);
-            const dataCat = allLabelsCat.slice(0, 6).map(l => datosCategoria[l]);
-            
-            const coloresCat = ['#102A57', '#fd7e14', '#198754', '#ffc107', '#0dcaf0', '#6c757d'];
+        if(typeof datosEstado !== 'undefined') {
+            const labelsEst = Object.keys(datosEstado);
+            const dataEst = labelsEst.map(l => datosEstado[l]);
+            const coloresEst = ['#102A57', '#198754', '#dc3545']; // Azul para Exactas, Verde para Sobrantes, Rojo para Faltantes
 
-            if(document.getElementById('chartCategoria')) {
-                new Chart(document.getElementById('chartCategoria'), {
+            // Solo mostramos el gráfico si al menos hay una caja cerrada
+            const totalCajasCerradas = dataEst.reduce((a, b) => a + b, 0);
+
+            if(document.getElementById('chartEstado') && totalCajasCerradas > 0) {
+                new Chart(document.getElementById('chartEstado'), {
                     type: 'doughnut',
                     data: { 
-                        labels: labelsCat, 
-                        datasets: [{ data: dataCat, backgroundColor: coloresCat, borderWidth: 1 }] 
+                        labels: labelsEst, 
+                        datasets: [{ data: dataEst, backgroundColor: coloresEst, borderWidth: 1 }] 
                     },
                     options: { 
                         layout: { padding: { bottom: 10 } },
@@ -336,10 +330,9 @@ try {
         }
     });
 
-    // MÁRGENES DE TITANIO VANGUARD PRO
     const optGlobal = { 
         margin: [15, 10, 25, 10], 
-        filename: 'Reporte_Gastos_Corporativo.pdf', 
+        filename: 'Reporte_Auditoria_Cajas.pdf', 
         image: { type: 'jpeg', quality: 0.98 }, 
         html2canvas: { scale: 2, useCORS: true, scrollY: 0 }, 
         pagebreak: { mode: 'css', avoid: ['.evitar-corte'] }, 
@@ -363,7 +356,7 @@ try {
             const textoEmpresa = '<?php echo addslashes(strtoupper($negocio['nombre'])); ?>';
             const textoGenerador = '<?php echo addslashes($usuario_actual); ?>';
             
-            pdf.text('Reporte de Gastos - ' + textoEmpresa, 10, 284);
+            pdf.text('Auditoría de Cajas - ' + textoEmpresa, 10, 284);
             pdf.text('Página ' + i + ' de ' + totalPages, 200, 284, { align: 'right' });
             pdf.text('Emisión: <?php echo date('d/m/Y H:i'); ?> | Solicitado por: ' + textoGenerador, 10, 288);
 
@@ -388,7 +381,7 @@ try {
             cancelButtonText: 'Cerrar'
         }).then((result) => {
             if (result.isConfirmed) {
-                const msj = `📉 *REPORTE DE EGRESOS Y MERMAS*\n🏢 <?php echo $negocio['nombre']; ?>\n📅 Período: <?php echo $rango_texto; ?>\n📄 Ver online: ${window.location.href}`;
+                const msj = `📦 *AUDITORÍA DE CAJAS*\n🏢 <?php echo $negocio['nombre']; ?>\n📅 Período: <?php echo $rango_texto; ?>\n📄 Ver online: ${window.location.href}`;
                 window.open(`https://wa.me/?text=${encodeURIComponent(msj)}`, '_blank');
             } else if (result.isDenied) {
                 enviarPorEmailReal();
@@ -406,7 +399,7 @@ try {
                     aplicarFormatoPaginas(pdf); return pdf.output('blob');
                 }).then(blob => {
                     let fData = new FormData();
-                    fData.append('email', email); fData.append('pdf_file', blob, 'Reporte_Gastos.pdf');
+                    fData.append('email', email); fData.append('pdf_file', blob, 'Reporte_Cajas.pdf');
                     return fetch('acciones/enviar_email_reporte_general.php', { method: 'POST', body: fData })
                     .then(r => { if(!r.ok) throw new Error(r.statusText); return r.json(); })
                     .catch(e => Swal.showValidationMessage(`Error: ${e}`));

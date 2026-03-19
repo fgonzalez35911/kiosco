@@ -127,8 +127,21 @@ $deg_dir = '135deg';
                         </ul>
                     </div>
                 <?php else: ?>
-                    <a href="login_cliente.php" class="btn btn-outline-primary btn-nav-sm rounded-pill fw-bold">Ingresar</a>
-                    <a href="registro_cliente.php" class="btn btn-primary btn-nav-sm rounded-pill fw-bold">Registrarme</a>
+                    <div class="d-none d-md-flex gap-2">
+                        <a href="login_cliente.php" class="btn btn-outline-primary btn-nav-sm rounded-pill fw-bold shadow-sm">Ingresar</a>
+                        <a href="registro_cliente.php" class="btn btn-primary btn-nav-sm rounded-pill fw-bold shadow-sm">Registrarme</a>
+                    </div>
+                    
+                    <div class="d-md-none dropdown">
+                        <button class="btn btn-light rounded-circle shadow-sm border p-0 d-flex align-items-center justify-content-center" type="button" data-bs-toggle="dropdown" aria-expanded="false" style="width: 38px; height: 38px;">
+                            <i class="bi bi-person-circle fs-5" style="color: <?php echo $color_pri; ?>;"></i>
+                        </button>
+                        <ul class="dropdown-menu dropdown-menu-end shadow-lg border-0 mt-2 rounded-4">
+                            <li><a class="dropdown-item fw-bold py-2" href="login_cliente.php"><i class="bi bi-box-arrow-in-right me-2 opacity-75"></i> Ingresar</a></li>
+                            <li><hr class="dropdown-divider m-0"></li>
+                            <li><a class="dropdown-item fw-bold py-2" href="registro_cliente.php"><i class="bi bi-person-plus-fill me-2 opacity-75"></i> Registrarme</a></li>
+                        </ul>
+                    </div>
                 <?php endif; ?>
             </div>
         </div>

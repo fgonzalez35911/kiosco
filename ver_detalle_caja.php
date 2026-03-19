@@ -1,5 +1,5 @@
 <?php
-// ver_detalle_caja.php - VERSIÓN CORREGIDA (Variables vinculadas estrictamente a DB)
+// ver_detalle_caja.php - VERSIÓN FINAL GARANTIZADA (Lógica PHP pura para movimientos)
 session_start();
 require_once 'includes/db.php';
 
@@ -11,13 +11,13 @@ if (!isset($_SESSION['usuario_id']) || (isset($_SESSION['rol']) && $_SESSION['ro
 if (!isset($_GET['id'])) { header("Location: historial_cajas.php"); exit; }
 $id_sesion = $_GET['id'];
 
-// 1. OBTENER COLOR DEL SISTEMA
+// 1. OBTENER COLOR DEL SISTEMA (Corregido para tu DB)
 $color_sistema = '#102A57';
 try {
-    $resColor = $conexion->query("SELECT color_principal FROM configuracion WHERE id=1");
+    $resColor = $conexion->query("SELECT color_barra_nav FROM configuracion WHERE id=1");
     if ($resColor) {
         $dataC = $resColor->fetch(PDO::FETCH_ASSOC);
-        if (isset($dataC['color_principal'])) $color_sistema = $dataC['color_principal'];
+        if (isset($dataC['color_barra_nav'])) $color_sistema = $dataC['color_barra_nav'];
     }
 } catch (Exception $e) { }
 
@@ -28,32 +28,78 @@ $caja = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$caja) { die("Error: La sesión de caja no existe."); }
 
-// 3. CÁLCULOS DE TOTALES
-$sqlRifas = "SELECT SUM(total) FROM ventas WHERE id_caja_sesion = ? AND estado='completada' AND codigo_ticket LIKE 'RIFA-%'";
-$stmtR = $conexion->prepare($sqlRifas); $stmtR->execute([$id_sesion]);
+// Detectar rubro actual para filtrar
+$conf_rubro = $conexion->query("SELECT tipo_negocio FROM configuracion WHERE id=1")->fetch(PDO::FETCH_ASSOC);
+$rubro_actual = $conf_rubro['tipo_negocio'] ?? 'kiosco';
+
+// 3. CÁLCULOS DE TOTALES (Aislados por rubro)
+$stmtR = $conexion->prepare("SELECT SUM(total) FROM ventas WHERE id_caja_sesion = ? AND estado='completada' AND codigo_ticket LIKE 'RIFA-%' AND (tipo_negocio = ? OR tipo_negocio IS NULL)");
+$stmtR->execute([$id_sesion, $rubro_actual]);
 $total_rifas = floatval($stmtR->fetchColumn() ?: 0);
 
-$sqlVentas = "SELECT SUM(total) FROM ventas WHERE id_caja_sesion = ? AND estado='completada' AND (codigo_ticket NOT LIKE 'RIFA-%' OR codigo_ticket IS NULL)";
-$stmtV = $conexion->prepare($sqlVentas); $stmtV->execute([$id_sesion]);
+$stmtV = $conexion->prepare("SELECT SUM(total) FROM ventas WHERE id_caja_sesion = ? AND estado='completada' AND (codigo_ticket NOT LIKE 'RIFA-%' OR codigo_ticket IS NULL) AND (tipo_negocio = ? OR tipo_negocio IS NULL)");
+$stmtV->execute([$id_sesion, $rubro_actual]);
 $total_ventas = floatval($stmtV->fetchColumn() ?: 0);
 
-$sqlGastos = "SELECT SUM(monto) FROM gastos WHERE id_caja_sesion = ?";
-$stmtG = $conexion->prepare($sqlGastos); $stmtG->execute([$id_sesion]);
+$stmtG = $conexion->prepare("SELECT SUM(monto) FROM gastos WHERE id_caja_sesion = ? AND (tipo_negocio = ? OR tipo_negocio IS NULL)");
+$stmtG->execute([$id_sesion, $rubro_actual]);
 $total_gastos = floatval($stmtG->fetchColumn() ?: 0);
 
-// 4. LISTADO DE MOVIMIENTOS
-$movimientos = $conexion->prepare("
-    SELECT 'Venta' as tipo, id, fecha, total as monto, metodo_pago as detalle, IFNULL(codigo_ticket, '') as codigo_ticket 
-    FROM ventas WHERE id_caja_sesion = ? AND estado='completada'
-    UNION ALL
-    SELECT 'Gasto' as tipo, id, fecha, monto, categoria as detalle, descripcion as codigo_ticket 
-    FROM gastos WHERE id_caja_sesion = ?
-    ORDER BY fecha DESC
-");
-$movimientos->execute([$id_sesion, $id_sesion]);
-$lista = $movimientos->fetchAll(PDO::FETCH_ASSOC);
+// 4. CONSTRUCCIÓN DE LA TABLA DE MOVIMIENTOS (Sin UNION SQL para evitar errores de servidor)
+$lista_movimientos = [];
 
-// Lógica de Diferencia
+// A. Agregar la Apertura
+$lista_movimientos[] = [
+    'hora' => date('H:i', strtotime($caja['fecha_apertura'])),
+    'tipo' => 'Apertura',
+    'detalle' => 'Fondo Inicial Recibido',
+    'monto' => floatval($caja['monto_inicial']),
+    'ticket' => 'SISTEMA',
+    'id' => 0
+];
+
+// B. Obtener Ventas y sus productos (Lógica de Auditoría)
+$stmtVentas = $conexion->prepare("SELECT id, fecha, total, metodo_pago, codigo_ticket FROM ventas WHERE id_caja_sesion = ? AND estado='completada' AND (tipo_negocio = ? OR tipo_negocio IS NULL)");
+$stmtVentas->execute([$id_sesion, $rubro_actual]);
+$ventas_db = $stmtVentas->fetchAll(PDO::FETCH_ASSOC);
+
+foreach($ventas_db as $v) {
+    // Buscar productos de esta venta
+    $stmtD = $conexion->prepare("SELECT d.cantidad, p.descripcion FROM detalle_ventas d LEFT JOIN productos p ON d.id_producto = p.id WHERE d.id_venta = ?");
+    $stmtD->execute([$v['id']]);
+    $prods = $stmtD->fetchAll(PDO::FETCH_ASSOC);
+    $detalle_prods = "";
+    foreach($prods as $p) { $detalle_prods .= round($p['cantidad']) . "x " . ($p['descripcion'] ?: 'Item') . "<br>"; }
+
+    $lista_movimientos[] = [
+        'hora' => date('H:i', strtotime($v['fecha'])),
+        'tipo' => (strpos($v['codigo_ticket'], 'RIFA-') === 0) ? 'Rifa' : 'Venta',
+        'detalle' => $detalle_prods ?: $v['metodo_pago'],
+        'monto' => floatval($v['total']),
+        'ticket' => $v['codigo_ticket'] ?: 'Venta #'.$v['id'],
+        'id' => $v['id']
+    ];
+}
+
+// C. Obtener Gastos
+$stmtGastos = $conexion->prepare("SELECT id, fecha, monto, categoria, descripcion FROM gastos WHERE id_caja_sesion = ? AND (tipo_negocio = ? OR tipo_negocio IS NULL)");
+$stmtGastos->execute([$id_sesion, $rubro_actual]);
+$gastos_db = $stmtGastos->fetchAll(PDO::FETCH_ASSOC);
+
+foreach($gastos_db as $g) {
+    $lista_movimientos[] = [
+        'hora' => date('H:i', strtotime($g['fecha'])),
+        'tipo' => 'Gasto',
+        'detalle' => $g['descripcion'],
+        'monto' => floatval($g['monto']),
+        'ticket' => $g['categoria'],
+        'id' => 0
+    ];
+}
+
+// Ordenar todos los movimientos por hora de menor a mayor
+usort($lista_movimientos, function($a, $b) { return strcmp($a['hora'], $b['hora']); });
+
 $diferencia = floatval($caja['diferencia']);
 $esFaltante = ($diferencia < -0.01);
 ?>
@@ -117,32 +163,42 @@ $esFaltante = ($diferencia < -0.01);
                 </div>
                 <div class="table-responsive">
                     <table class="table table-hover align-middle mb-0">
-                        <thead class="bg-light">
+                        <thead class="bg-light text-center">
                             <tr>
-                                <th class="ps-4">Hora</th>
+                                <th class="ps-4 text-start">Hora</th>
                                 <th>Tipo</th>
-                                <th>Detalle</th>
-                                <th class="text-end pe-4">Monto</th>
+                                <th class="text-start">Detalle / Productos</th>
+                                <th class="text-end">Monto</th>
+                                <th class="pe-4 text-end">Ticket</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <?php foreach($lista as $m): 
+                            <?php foreach($lista_movimientos as $m): 
                                 $esGasto = ($m['tipo'] == 'Gasto');
-                                $esRifa = (strpos($m['codigo_ticket'], 'RIFA-') === 0);
+                                $esApertura = ($m['tipo'] == 'Apertura');
                             ?>
-                            <tr>
-                                <td class="ps-4 text-muted small"><?php echo date('H:i', strtotime($m['fecha'])); ?> hs</td>
-                                <td>
-                                    <?php if($esGasto): ?><span class="badge bg-danger bg-opacity-10 text-danger">GASTO</span>
-                                    <?php elseif($esRifa): ?><span class="badge bg-warning text-dark">RIFA</span>
+                            <tr class="<?php echo $esApertura ? 'bg-light fw-bold text-primary' : ''; ?>">
+                                <td class="ps-4 text-start text-muted small"><?php echo $m['hora']; ?> hs</td>
+                                <td class="text-center">
+                                    <?php if($esApertura): ?><span class="badge bg-primary">INICIO</span>
+                                    <?php elseif($esGasto): ?><span class="badge bg-danger bg-opacity-10 text-danger">GASTO</span>
                                     <?php else: ?><span class="badge bg-success bg-opacity-10 text-success">VENTA</span><?php endif; ?>
                                 </td>
-                                <td>
-                                    <div class="fw-bold text-dark" style="font-size: 0.9rem;"><?php echo htmlspecialchars($m['detalle']); ?></div>
-                                    <small class="text-muted"><?php echo htmlspecialchars($m['codigo_ticket']); ?></small>
+                                <td class="text-start">
+                                    <div class="fw-bold text-dark" style="font-size: 0.85rem;">
+                                        <?php if($esApertura) echo $m['detalle']; else echo $m['ticket']; ?>
+                                    </div>
+                                    <div class="text-muted" style="font-size: 0.75rem; line-height: 1.2;"><?php echo $m['detalle']; ?></div>
                                 </td>
-                                <td class="text-end pe-4 fw-bold <?php echo $esGasto ? 'text-danger' : 'text-dark'; ?>">
+                                <td class="text-end fw-bold <?php echo $esGasto ? 'text-danger' : ($esApertura ? 'text-primary' : 'text-dark'); ?>">
                                     <?php echo $esGasto ? '-' : ''; ?>$<?php echo number_format($m['monto'], 2, ',', '.'); ?>
+                                </td>
+                                <td class="pe-4 text-end">
+                                    <?php if($m['tipo'] == 'Venta' || $m['tipo'] == 'Rifa'): ?>
+                                        <a href="ticket.php?id=<?php echo $m['id']; ?>" target="_blank" class="btn btn-sm btn-outline-primary border-0 rounded-pill">
+                                            <i class="bi bi-receipt fs-5"></i>
+                                        </a>
+                                    <?php endif; ?>
                                 </td>
                             </tr>
                             <?php endforeach; ?>
@@ -166,44 +222,19 @@ $esFaltante = ($diferencia < -0.01);
             <div class="card card-custom border-0 shadow-sm bg-light">
                 <div class="card-body p-4">
                     <h5 class="fw-bold mb-4">Resumen de Cierre</h5>
-                    
-                    <div class="d-flex justify-content-between mb-2">
-                        <span class="text-muted">Efectivo Inicial:</span>
-                        <span class="fw-bold">$<?php echo number_format($caja['monto_inicial'], 2, ',', '.'); ?></span>
-                    </div>
-                    <div class="d-flex justify-content-between mb-2">
-                        <span class="text-muted">Ventas Brutas (+):</span>
-                        <span class="text-success fw-bold">$<?php echo number_format($total_ventas + $total_rifas, 2, ',', '.'); ?></span>
-                    </div>
-                    <div class="d-flex justify-content-between mb-3">
-                        <span class="text-muted">Gastos/Retiros (-):</span>
-                        <span class="text-danger fw-bold">-$<?php echo number_format($total_gastos, 2, ',', '.'); ?></span>
-                    </div>
-                    
+                    <div class="d-flex justify-content-between mb-2"><span class="text-muted small">Efectivo Inicial:</span><span class="fw-bold">$<?php echo number_format($caja['monto_inicial'], 2, ',', '.'); ?></span></div>
+                    <div class="d-flex justify-content-between mb-2"><span class="text-muted small">Ventas Brutas (+):</span><span class="text-success fw-bold">$<?php echo number_format($total_ventas + $total_rifas, 2, ',', '.'); ?></span></div>
+                    <div class="d-flex justify-content-between mb-3"><span class="text-muted small">Gastos/Retiros (-):</span><span class="text-danger fw-bold">-$<?php echo number_format($total_gastos, 2, ',', '.'); ?></span></div>
                     <hr>
-                    
-                    <div class="d-flex justify-content-between align-items-center mb-4">
-                        <span class="h6 mb-0 fw-bold text-muted">SALDO ESPERADO:</span>
-                        <span class="h4 mb-0 fw-bold text-primary">$<?php echo number_format($caja['monto_inicial'] + ($total_ventas + $total_rifas) - $total_gastos, 2, ',', '.'); ?></span>
-                    </div>
-
+                    <div class="d-flex justify-content-between align-items-center mb-4"><span class="h6 mb-0 fw-bold text-muted">SALDO ESPERADO:</span><span class="h4 mb-0 fw-bold text-primary">$<?php echo number_format($caja['monto_inicial'] + ($total_ventas + $total_rifas) - $total_gastos, 2, ',', '.'); ?></span></div>
                     <div class="p-3 rounded-4 bg-white border border-2 <?php echo ($esFaltante) ? 'border-danger' : 'border-success'; ?>">
                         <small class="text-muted d-block text-uppercase fw-bold" style="font-size: 0.65rem;">Efectivo Real declarado:</small>
                         <span class="h3 fw-bold d-block">$<?php echo number_format($caja['monto_final'], 2, ',', '.'); ?></span>
-                        
-                        <?php if($esFaltante): ?>
-                            <div class="mt-2 text-danger fw-bold">
-                                <i class="bi bi-dash-circle-fill"></i> FALTANTE: $<?php echo number_format(abs($diferencia), 2, ',', '.'); ?>
-                            </div>
-                        <?php elseif($diferencia > 0.01): ?>
-                            <div class="mt-2 text-warning fw-bold">
-                                <i class="bi bi-plus-circle-fill"></i> SOBRANTE: $<?php echo number_format($diferencia, 2, ',', '.'); ?>
-                            </div>
-                        <?php else: ?>
-                            <div class="mt-2 text-success fw-bold">
-                                <i class="bi bi-check-circle-fill"></i> Caja Perfecta
-                            </div>
-                        <?php endif; ?>
+                        <div class="mt-2 <?php echo $esFaltante ? 'text-danger' : 'text-success'; ?> fw-bold">
+                            <?php if($esFaltante): ?><i class="bi bi-dash-circle-fill"></i> FALTANTE: $<?php echo number_format(abs($diferencia), 2, ',', '.'); ?>
+                            <?php elseif($diferencia > 0.01): ?><i class="bi bi-plus-circle-fill"></i> SOBRANTE: $<?php echo number_format($diferencia, 2, ',', '.'); ?>
+                            <?php else: ?><i class="bi bi-check-circle-fill"></i> Caja Perfecta<?php endif; ?>
+                        </div>
                     </div>
                 </div>
             </div>

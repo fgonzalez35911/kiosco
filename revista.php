@@ -6,29 +6,35 @@ require_once 'includes/db.php';
 
 // 1. DATA
 $conf_sis = $conexion->query("SELECT * FROM configuracion WHERE id=1")->fetch(PDO::FETCH_ASSOC);
+$rubro_actual = $conf_sis['tipo_negocio'] ?? 'kiosco';
+
 try {
-    $stmt_rev = $conexion->query("SELECT * FROM revista_config WHERE id=1");
+    $stmt_rev = $conexion->query("SELECT * FROM revista_config WHERE tipo_negocio = '$rubro_actual'");
     $conf_rev = $stmt_rev ? $stmt_rev->fetch(PDO::FETCH_ASSOC) : [];
 } catch(Exception $e) { $conf_rev = []; }
+
+// --- PARCHE DE SEGURIDAD PARA PUBLICIDADES ---
+try { $conexion->exec("ALTER TABLE revista_paginas ADD COLUMN IF NOT EXISTS tipo_negocio VARCHAR(50) DEFAULT 'kiosco'"); } catch(Exception $e){}
 
 // Ads
 $paginas_especiales = [];
 try {
-    $stmt_esp = $conexion->query("SELECT * FROM revista_paginas WHERE activa=1 ORDER BY posicion ASC");
+    $stmt_esp = $conexion->query("SELECT * FROM revista_paginas WHERE activa=1 AND (tipo_negocio = '$rubro_actual' OR tipo_negocio IS NULL) ORDER BY posicion ASC");
     if($stmt_esp) {
         $rows = $stmt_esp->fetchAll(PDO::FETCH_ASSOC);
         foreach($rows as $r) { $paginas_especiales[] = $r; }
     }
 } catch(Exception $e) {}
 
-// 2. PRODUCTOS
+// 2. PRODUCTOS (Consulta blindada antifallos)
 $sql_prod = "SELECT p.*, c.nombre as categoria, cb.fecha_inicio, cb.fecha_fin, cb.es_ilimitado 
         FROM productos p 
         JOIN categorias c ON p.id_categoria = c.id 
-        LEFT JOIN combos cb ON p.codigo_barras = cb.codigo_barras
-        WHERE p.activo = 1 AND (p.stock_actual > 0 OR p.tipo = 'combo') 
-        ORDER BY c.nombre ASC, p.descripcion ASC";
-$raw_productos = $conexion->query($sql_prod)->fetchAll(PDO::FETCH_ASSOC);
+        LEFT JOIN combos cb ON p.codigo_barras = cb.codigo_barras 
+        WHERE p.activo = 1 AND (p.tipo_negocio = '$rubro_actual' OR p.tipo_negocio IS NULL)";
+
+$stmt_prod = $conexion->query($sql_prod);
+$raw_productos = $stmt_prod ? $stmt_prod->fetchAll(PDO::FETCH_ASSOC) : [];
 
 $productos_por_cat = [];
 foreach ($raw_productos as $p) {
@@ -92,10 +98,9 @@ $colores_cat = ['#e60023', '#007bff', '#28a745', '#fd7e14', '#6610f2', '#6f42c1'
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
     <link href="https://fonts.googleapis.com/css2?family=Anton&family=Bebas+Neue&family=Poppins:wght@300;400;600;800&display=swap" rel="stylesheet">
-    .swal2-container { z-index: 20001 !important; }
-    
     
     <style>
+        .swal2-container { z-index: 20001 !important; }
         :root { --dark-bg: #1a1a1a; --header-h: 60px; --footer-h: 70px; }
         
         body { 
@@ -262,24 +267,25 @@ $colores_cat = ['#e60023', '#007bff', '#28a745', '#fd7e14', '#6610f2', '#6f42c1'
         }
 
         .prod-info-box { 
-            height: 65px; background: #f9f9f9; border-top: 1px solid #eee; 
-            padding: 4px; text-align: center; display: flex; flex-direction: column; justify-content: center; flex-shrink: 0; 
+            height: 62px; background: #f9f9f9; border-top: 1px solid #eee; 
+            padding: 2px; text-align: center; display: flex; flex-direction: column; justify-content: center; flex-shrink: 0; 
         }
-        .prod-title { font-size: 0.75rem; font-weight: bold; color: #444; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.2; }
-        .prod-price { font-family: 'Bebas Neue'; font-size: 1.5rem; color: #d63031; line-height: 1; }
+        .prod-title { font-size: 0.7rem; font-weight: bold; color: #444; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.1; }
+        .prod-price { font-family: 'Bebas Neue'; font-size: 1.2rem; color: #d63031; line-height: 1; }
 
-        /* BOTÓN AGREGAR (FIX CLIC MÓVIL) */
-        /* BOTÓN AGREGAR MEJORADO (MÁS GRANDE Y ENCIMA DE TODO) */
+        /* EL BOTÓN DE LA TIENDA - ADAPTADO A IZQUIERDA */
+        /* BOTÓN AGREGAR - DERECHA Y SIN INTERFERENCIAS */
         .btn-plus {
-            position: absolute; top: 10px; right: 10px;
-            width: 45px; height: 45px; /* Agrandamos de 35 a 45 para mejor puntería */
-            border-radius: 50%;
+            position: absolute; top: 10px; right: 13px; left: auto;
+            width: 38px; height: 38px; border-radius: 50%;
             background: #28a745; color: white; border: none;
             display: flex; align-items: center; justify-content: center;
             box-shadow: 0 4px 10px rgba(0,0,0,0.3); 
-            z-index: 2000; /* Z-Index alto para que nada lo tape */
-            cursor: pointer; font-size: 1.4rem;
+            z-index: 20000 !important; 
+            cursor: pointer; font-size: 1.2rem;
+            pointer-events: auto !important;
         }
+        .btn-plus:active { transform: scale(0.9); }
         .btn-plus:active { transform: scale(0.9); background: #218838; }
 
         /* SCROLL CARRITO ESCRITORIO */
@@ -430,11 +436,8 @@ $colores_cat = ['#e60023', '#007bff', '#28a745', '#fd7e14', '#6610f2', '#6f42c1'
             <?php endif; ?>
         </div>
 
-        <button class="btn-plus" 
-    ontouchstart="event.stopPropagation(); addCart(<?php echo $p['id']; ?>, '<?php echo addslashes($p['descripcion']); ?>', <?php echo $precio_final; ?>, <?php echo $p['stock_actual']; ?>); return false;"
-    onmousedown="event.stopPropagation();"
-    onclick="event.stopPropagation(); addCart(<?php echo $p['id']; ?>, '<?php echo addslashes($p['descripcion']); ?>', <?php echo $precio_final; ?>, <?php echo $p['stock_actual']; ?>);">
-
+        <button type="button" class="btn-plus" 
+             onclick="event.stopPropagation(); addCart(<?php echo $p['id']; ?>, '<?php echo addslashes($p['descripcion']); ?>', <?php echo $precio_final; ?>, <?php echo $p['stock_actual']; ?>);">
             <i class="bi bi-plus-lg"></i>
         </button>
         

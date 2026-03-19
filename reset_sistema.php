@@ -99,7 +99,17 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 $conexion->query("DELETE FROM clientes WHERE id > 1");
                 $conexion->query("ALTER TABLE clientes AUTO_INCREMENT = 2");
             }
-
+            if (isset($_POST['check_auditoria'])) { 
+                $conexion->query("TRUNCATE TABLE auditoria"); 
+                try { $conexion->query("TRUNCATE TABLE historial_inflacion"); } catch(Exception $e) {}
+            }
+            if (isset($_POST['check_proveedores'])) {
+                try { $conexion->query("TRUNCATE TABLE movimientos_proveedores"); } catch(Exception $e) {}
+            }
+            if (isset($_POST['check_activos'])) {
+                try { $conexion->query("TRUNCATE TABLE activos"); } catch(Exception $e) {}
+                try { $conexion->query("TRUNCATE TABLE bienes"); } catch(Exception $e) {}
+            }
             if (isset($_POST['check_auditoria'])) { $conexion->query("TRUNCATE TABLE auditoria"); }
 
             $conexion->query("SET FOREIGN_KEY_CHECKS = 1");
@@ -171,6 +181,14 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                             <label class="list-group-item d-flex gap-3 bg-light">
                                 <input class="form-check-input flex-shrink-0" type="checkbox" name="check_auditoria" checked style="font-size: 1.3em;">
                                 <span><strong>Auditoría e Inflación</strong><small class="d-block text-muted">Logs de seguridad y aumentos de precios.</small></span>
+                            </label>
+                            <label class="list-group-item d-flex gap-3 bg-light border-warning">
+                                <input class="form-check-input flex-shrink-0" type="checkbox" name="check_proveedores" checked style="font-size: 1.3em;">
+                                <span><strong>Cuentas Proveedores</strong><small class="d-block text-muted">Elimina saldos, facturas y pagos (Quedan los nombres).</small></span>
+                            </label>
+                            <label class="list-group-item d-flex gap-3 bg-light border-warning">
+                                <input class="form-check-input flex-shrink-0" type="checkbox" name="check_activos" checked style="font-size: 1.3em;">
+                                <span><strong>Activos y Bienes</strong><small class="d-block text-muted">Vacía el inventario de bienes del local.</small></span>
                             </label>
                             <label class="list-group-item d-flex gap-3 bg-light border-danger">
                                 <input class="form-check-input flex-shrink-0" type="checkbox" name="check_productos" style="font-size: 1.3em;">

@@ -1,5 +1,5 @@
 <?php
-// reporte_gastos.php - VERSIÓN VANGUARD PRO (FLUJO NATIVO + GRÁFICOS)
+// reporte_canje_puntos.php - VERSIÓN VANGUARD PRO (FLUJO NATIVO + GRÁFICOS)
 session_start();
 $es_publico = isset($_GET['publico']) && $_GET['publico'] == '1';
 if (!isset($_SESSION['usuario_id']) && !$es_publico) { header("Location: index.php"); exit; }
@@ -39,61 +39,64 @@ try {
 
     $desde = $_GET['desde'] ?? date('Y-m-d', strtotime('-2 months'));
     $hasta = $_GET['hasta'] ?? date('Y-m-d');
-    $f_cat = $_GET['categoria_filtro'] ?? '';
-    $f_usu = $_GET['id_usuario'] ?? '';
-    $buscar = trim($_GET['buscar'] ?? '');
+    
+    $condiciones = ["a.accion = 'CANJE'", "DATE(a.fecha) >= ?", "DATE(a.fecha) <= ?"];
+    $parametros = [$desde, $hasta];
 
-    $condG = ["DATE(g.fecha) >= ?", "DATE(g.fecha) <= ?"];
-    $paramsG = [$desde, $hasta];
-    if($f_cat !== '' && $f_cat !== 'Mermas') { $condG[] = "g.categoria = ?"; $paramsG[] = $f_cat; }
-    if($f_usu !== '') { $condG[] = "g.id_usuario = ?"; $paramsG[] = $f_usu; }
-    if(!empty($buscar)) { $condG[] = "(g.descripcion LIKE ? OR g.id = ?)"; array_push($paramsG, "%$buscar%", intval($buscar)); }
-
-    $condM = ["DATE(m.fecha) >= ?", "DATE(m.fecha) <= ?", "m.motivo NOT LIKE 'Devolución #%'"];
-    $paramsM = [$desde, $hasta];
-    if($f_usu !== '') { $condM[] = "m.id_usuario = ?"; $paramsM[] = $f_usu; }
-    if($f_cat !== '' && $f_cat !== 'Mermas') { $condM[] = "1=0"; } 
-    if(!empty($buscar)) { $condM[] = "(m.motivo LIKE ? OR m.id = ?)"; array_push($paramsM, "%$buscar%", intval($buscar)); }
-
-    // Consulta unificada de Egresos
-    $sql = "(SELECT g.id, g.monto, g.categoria, g.fecha, g.descripcion, u.usuario, 'gasto' as tipo
-             FROM gastos g JOIN usuarios u ON g.id_usuario = u.id 
-             WHERE " . implode(" AND ", $condG) . ")
-            UNION 
-            (SELECT m.id, (m.cantidad * p.precio_costo) as monto, 'Mermas' as categoria, m.fecha, m.motivo as descripcion, u.usuario, 'merma' as tipo
-             FROM mermas m 
-             JOIN usuarios u ON m.id_usuario = u.id 
-             JOIN productos p ON m.id_producto = p.id
-             WHERE " . implode(" AND ", $condM) . ")
-            ORDER BY fecha DESC";
-
+    // Consulta de flujo continuo
+    $sql = "SELECT a.id, u.usuario, a.detalles, a.fecha 
+            FROM auditoria a 
+            LEFT JOIN usuarios u ON a.id_usuario = u.id 
+            WHERE " . implode(" AND ", $condiciones) . " ORDER BY a.fecha DESC";
     $stmt = $conexion->prepare($sql);
-    $stmt->execute(array_merge($paramsG, $paramsM));
+    $stmt->execute($parametros);
     $registros = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     $rango_texto = ($desde == $hasta) ? date('d/m/Y', strtotime($desde)) : date('d/m/Y', strtotime($desde)) . " al " . date('d/m/Y', strtotime($hasta));
     
     // --- CÁLCULOS DE RESUMEN EJECUTIVO Y GRÁFICOS ---
-    $totalEgresos = 0;
-    $gastos_categoria = [];
-    $gastos_operador = [];
+    $totalPuntosCanjeados = 0;
+    $totalOperaciones = count($registros);
+    $puntos_operador = [];
+    $top_premios = [];
 
-    foreach($registros as $r) {
-        $monto = floatval($r['monto']);
-        $totalEgresos += $monto;
+    // Limpieza de datos (Misma lógica original tuya, adaptada para extraer estadísticas)
+    foreach($registros as &$r) {
+        $detalle_texto = $r['detalles'];
+        $cliente_nombre = "Cliente General";
+        $pts = 0;
+        
+        if (strpos($detalle_texto, '| Cliente:') !== false) {
+            $partes = explode('| Cliente:', $detalle_texto);
+            $detalle_texto = trim($partes[0]);
+            $cliente_nombre = trim($partes[1]);
+        }
+        if (preg_match('/\(-(\d+)\s*pts\)/', $detalle_texto, $matches)) {
+            $pts = intval($matches[1]);
+        }
+        $detalle_texto = trim(preg_replace('/\(-(\d+)\s*pts\)/', '', $detalle_texto));
+        
+        $totalPuntosCanjeados += $pts;
 
-        // Para gráfico circular (Categorías)
-        $cat = strtoupper($r['categoria']);
-        if(!isset($gastos_categoria[$cat])) { $gastos_categoria[$cat] = 0; }
-        $gastos_categoria[$cat] += $monto;
+        // Guardamos los datos limpios en el registro para imprimirlos luego
+        $r['cliente_limpio'] = $cliente_nombre;
+        $r['premio_limpio'] = $detalle_texto;
+        $r['puntos_limpios'] = $pts;
 
-        // Para gráfico de barras (Operadores)
-        $usu = strtoupper($r['usuario']);
-        if(!isset($gastos_operador[$usu])) { $gastos_operador[$usu] = 0; }
-        $gastos_operador[$usu] += $monto;
+        // Sumar para gráfico de operadores
+        $usu = strtoupper($r['usuario'] ?? 'SISTEMA');
+        if(!isset($puntos_operador[$usu])) { $puntos_operador[$usu] = 0; }
+        $puntos_operador[$usu] += $pts;
+
+        // Sumar para gráfico de premios (Top Premios)
+        $premio = strtoupper($detalle_texto);
+        if(!isset($top_premios[$premio])) { $top_premios[$premio] = 0; }
+        $top_premios[$premio]++;
     }
-    arsort($gastos_categoria);
-    arsort($gastos_operador);
+    unset($r); // Romper referencia
+
+    arsort($puntos_operador);
+    arsort($top_premios);
 
     $url_actual = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[REQUEST_URI]";
     if (strpos($url_actual, 'publico=1') === false) {
@@ -110,7 +113,7 @@ try {
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Reporte Gastos - Vanguard Pro</title>
+    <title>Reporte Canjes - Vanguard Pro</title>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
     
@@ -158,7 +161,7 @@ try {
         <table>
             <thead>
                 <tr>
-                    <td colspan="4" style="border:none; padding:0; background:white;">
+                    <td colspan="6" style="border:none; padding:0; background:white;">
                         <header>
                             <div style="width: 20%; text-align: left;">
                                 <?php if(!empty($negocio['logo'])): ?>
@@ -171,65 +174,63 @@ try {
                                 <p style="font-size: 9pt; margin: 0;"><strong>CUIT: <?php echo $negocio['cuit']; ?></strong></p>
                             </div>
                             <div style="text-align: right; width: 30%; font-size: 8pt; color: #333; font-weight: normal;">
-                                <strong>REPORTE DE EGRESOS</strong><br><?php echo $rango_texto; ?><br>
+                                <strong>REPORTE DE CANJES</strong><br><?php echo $rango_texto; ?><br>
                                 <strong style="color:#102A57;">EMISIÓN: <?php echo date('d/m/Y H:i'); ?></strong>
                             </div>
                         </header>
                         <h3 style="color: #102A57; border-left: 5px solid #102A57; padding-left: 10px; margin-bottom: 20px; margin-top:0; text-transform: uppercase; font-size: 11pt;">
-                            Detalle de Gastos y Mermas
+                            Detalle de Premios Otorgados
                         </h3>
                     </td>
                 </tr>
                 <tr>
                     <th style="width: 15%;">FECHA</th>
-                    <th style="width: 45%;">CONCEPTO / OPERADOR</th>
-                    <th style="width: 20%;">CATEGORÍA</th>
-                    <th style="width: 20%; text-align: right;">MONTO</th>
+                    <th style="width: 15%;">OPERADOR</th>
+                    <th style="width: 15%;">TICKET ORIGEN</th>
+                    <th style="width: 20%;">CLIENTE</th>
+                    <th style="width: 20%;">PREMIO</th>
+                    <th style="width: 15%; text-align: right;">PUNTOS</th>
                 </tr>
             </thead>
             
             <tbody>
-                <?php if(count($registros) > 0): ?>
+                <?php if($totalOperaciones > 0): ?>
                     <?php foreach($registros as $r): ?>
                     <tr class="evitar-corte">
                         <td><?php echo date('d/m/y H:i', strtotime($r['fecha'])); ?></td>
-                        <td><strong><?php echo strtoupper($r['descripcion']); ?></strong><br><small style="color:#666;">Operador: <?php echo strtoupper($r['usuario']); ?></small></td>
-                        <td>
-                            <?php if($r['categoria'] == 'Mermas'): ?>
-                                <span style="background: #f8d7da; color:#dc3545; padding: 2px 6px; border-radius: 4px; font-size: 8pt; font-weight: bold;">MERMA</span>
-                            <?php else: ?>
-                                <span style="background: #eee; padding: 2px 6px; border-radius: 4px; font-size: 8pt; font-weight: bold;"><?php echo strtoupper($r['categoria']); ?></span>
-                            <?php endif; ?>
-                        </td>
-                        <td style="text-align: right; font-weight: bold; color:#dc3545;">-$<?php echo number_format($r['monto'], 2, ',', '.'); ?></td>
+                        <td style="font-weight: bold; color: #444;"><?php echo strtoupper($r['usuario'] ?? 'SISTEMA'); ?></td>
+                        <td><span style="background: #eee; padding: 2px 6px; border-radius: 4px; font-size: 8pt; font-weight: bold;">#<?php echo $r['id']; ?></span></td>
+                        <td><?php echo strtoupper($r['cliente_limpio']); ?></td>
+                        <td><?php echo strtoupper($r['premio_limpio']); ?></td>
+                        <td style="text-align: right; font-weight: bold; color:#102A57; white-space: nowrap !important;">-<?php echo number_format($r['puntos_limpios'], 0, ',', '.'); ?> pts</td>
                     </tr>
                     <?php endforeach; ?>
                     
                     <tr class="evitar-corte">
-                        <td colspan="4" style="text-align: center; padding: 40px 20px; color: #a0a0a0; border-top: 2px dashed #e0e0e0;">
-                            <i class="bi bi-wallet2" style="font-size: 28pt; display: block; margin-bottom: 10px; color: #d0d0d0;"></i>
-                            <span style="font-size: 10pt; font-weight: bold; text-transform: uppercase; letter-spacing: 2px;">Fin de Registros de Egresos</span>
+                        <td colspan="6" style="text-align: center; padding: 40px 20px; color: #a0a0a0; border-top: 2px dashed #e0e0e0;">
+                            <i class="bi bi-gift" style="font-size: 28pt; display: block; margin-bottom: 10px; color: #d0d0d0;"></i>
+                            <span style="font-size: 10pt; font-weight: bold; text-transform: uppercase; letter-spacing: 2px;">Fin de Registros de Canjes</span>
                         </td>
                     </tr>
                 <?php else: ?>
-                    <tr><td colspan="4" style="text-align:center; padding: 30px; color:#666;">No hubo egresos en este periodo.</td></tr>
+                    <tr><td colspan="6" style="text-align:center; padding: 30px; color:#666;">No hubo canjes registrados en este periodo.</td></tr>
                 <?php endif; ?>
             </tbody>
         </table>
 
-        <?php if(count($registros) > 0): ?>
+        <?php if($totalOperaciones > 0): ?>
         <div class="evitar-corte" style="margin-top: 30px;">
             <div class="resumen-card">
-                <h4 style="color: #102A57; border-bottom: 2px solid #102A57; padding-bottom: 5px; margin-bottom: 15px; margin-top:0; text-transform: uppercase; font-size: 11pt;">Resumen Ejecutivo de Egresos</h4>
+                <h4 style="color: #102A57; border-bottom: 2px solid #102A57; padding-bottom: 5px; margin-bottom: 15px; margin-top:0; text-transform: uppercase; font-size: 11pt;">Resumen Ejecutivo de Fidelización</h4>
                 
                 <div style="display: flex; gap: 20px; margin-bottom: 20px;">
                     <div style="flex: 1; background: white; padding: 10px; border-radius: 5px; border: 1px solid #ddd; text-align: center;">
-                        <small style="color: #666; font-weight: bold; text-transform: uppercase; font-size: 7pt;">Movimientos Totales</small>
-                        <div style="font-size: 16pt; font-weight: 900; color: #102A57;"><?php echo count($registros); ?></div>
+                        <small style="color: #666; font-weight: bold; text-transform: uppercase; font-size: 7pt;">Total de Canjes</small>
+                        <div style="font-size: 16pt; font-weight: 900; color: #102A57;"><?php echo $totalOperaciones; ?></div>
                     </div>
-                    <div style="flex: 1; background: #fdf2f2; padding: 10px; border-radius: 5px; border: 1px solid #dc3545; text-align: center;">
-                        <small style="color: #dc3545; font-weight: bold; text-transform: uppercase; font-size: 7pt;">Egreso Bruto Consolidado</small>
-                        <div style="font-size: 16pt; font-weight: 900; color: #dc3545;">-$<?php echo number_format($totalEgresos, 2, ',', '.'); ?></div>
+                    <div style="flex: 1; background: #e8f4fd; padding: 10px; border-radius: 5px; border: 1px solid #102A57; text-align: center;">
+                        <small style="color: #102A57; font-weight: bold; text-transform: uppercase; font-size: 7pt;">Puntos Totales Redimidos</small>
+                        <div style="font-size: 16pt; font-weight: 900; color: #102A57;">-<?php echo number_format($totalPuntosCanjeados, 0, ',', '.'); ?> pts</div>
                     </div>
                 </div>
 
@@ -237,24 +238,24 @@ try {
                 
                 <div style="display: flex; justify-content: space-between; gap: 15px; width: 100%; box-sizing: border-box;">
                     <div style="flex: 1; background: white; padding: 15px; border-radius: 5px; border: 1px solid #ddd; box-sizing: border-box;">
-                        <strong style="font-size: 8pt; color: #666; text-transform: uppercase; display:block; text-align:center; margin-bottom:10px;">Egresos por Operador ($)</strong>
+                        <strong style="font-size: 8pt; color: #666; text-transform: uppercase; display:block; text-align:center; margin-bottom:10px;">Puntos Cedidos por Operador</strong>
                         <div style="position: relative; height: 220px; width: 100%;"><canvas id="chartOperador"></canvas></div>
                     </div>
                     <div style="flex: 1; background: white; padding: 15px; border-radius: 5px; border: 1px solid #ddd; box-sizing: border-box;">
-                        <strong style="font-size: 8pt; color: #666; text-transform: uppercase; display:block; text-align:center; margin-bottom:10px;">Distribución de Gastos</strong>
-                        <div style="position: relative; height: 220px; width: 100%;"><canvas id="chartCategoria"></canvas></div>
+                        <strong style="font-size: 8pt; color: #666; text-transform: uppercase; display:block; text-align:center; margin-bottom:10px;">Premios Más Solicitados</strong>
+                        <div style="position: relative; height: 220px; width: 100%;"><canvas id="chartPremios"></canvas></div>
                     </div>
                 </div>
             </div>
             
             <script> 
-                const datosOperador = <?php echo json_encode($gastos_operador); ?>; 
-                const datosCategoria = <?php echo json_encode($gastos_categoria); ?>; 
+                const datosOperador = <?php echo json_encode($puntos_operador); ?>; 
+                const datosPremios = <?php echo json_encode($top_premios); ?>; 
             </script>
 
             <div class="footer-section">
                 <div style="width: 40%; font-size: 8pt; color: #666; line-height: 1.4; text-align: justify;">
-                    <p><strong>DECLARACIÓN JURADA:</strong> Este reporte refleja fielmente las salidas de dinero (gastos) y el costo asociado a las mermas de inventario registradas en el sistema.</p>
+                    <p><strong>DECLARACIÓN JURADA:</strong> Este reporte refleja fielmente las operaciones de canje de puntos por fidelización registradas en el sistema. Su validez puede ser verificada escaneando el código QR.</p>
                 </div>
                 <div style="width: 30%; text-align: center;">
                     <img src="<?php echo $qr_url; ?>" style="width: 75px; height: 75px; border: 1px solid #ccc; padding: 2px;">
@@ -290,9 +291,9 @@ try {
                     data: { 
                         labels: labelsOp, 
                         datasets: [{ 
-                            label: 'Egresos ($)', 
+                            label: 'Puntos', 
                             data: dataOp, 
-                            backgroundColor: '#dc3545', 
+                            backgroundColor: '#102A57', 
                             borderRadius: 4,
                             maxBarThickness: 35 
                         }] 
@@ -310,20 +311,20 @@ try {
             }
         }
 
-        // Gráfico Circular: Categorías
-        if(typeof datosCategoria !== 'undefined' && Object.keys(datosCategoria).length > 0) {
-            const allLabelsCat = Object.keys(datosCategoria);
-            const labelsCat = allLabelsCat.slice(0, 6).map(l => l.length > 15 ? l.substring(0, 15) + '...' : l);
-            const dataCat = allLabelsCat.slice(0, 6).map(l => datosCategoria[l]);
+        // Gráfico Circular: Top Premios
+        if(typeof datosPremios !== 'undefined' && Object.keys(datosPremios).length > 0) {
+            const allLabelsPrem = Object.keys(datosPremios);
+            const labelsPrem = allLabelsPrem.slice(0, 6).map(l => l.length > 15 ? l.substring(0, 15) + '...' : l);
+            const dataPrem = allLabelsPrem.slice(0, 6).map(l => datosPremios[l]);
             
-            const coloresCat = ['#102A57', '#fd7e14', '#198754', '#ffc107', '#0dcaf0', '#6c757d'];
+            const coloresPrem = ['#ffc107', '#198754', '#0dcaf0', '#102A57', '#6c757d', '#dc3545'];
 
-            if(document.getElementById('chartCategoria')) {
-                new Chart(document.getElementById('chartCategoria'), {
+            if(document.getElementById('chartPremios')) {
+                new Chart(document.getElementById('chartPremios'), {
                     type: 'doughnut',
                     data: { 
-                        labels: labelsCat, 
-                        datasets: [{ data: dataCat, backgroundColor: coloresCat, borderWidth: 1 }] 
+                        labels: labelsPrem, 
+                        datasets: [{ data: dataPrem, backgroundColor: coloresPrem, borderWidth: 1 }] 
                     },
                     options: { 
                         layout: { padding: { bottom: 10 } },
@@ -339,7 +340,7 @@ try {
     // MÁRGENES DE TITANIO VANGUARD PRO
     const optGlobal = { 
         margin: [15, 10, 25, 10], 
-        filename: 'Reporte_Gastos_Corporativo.pdf', 
+        filename: 'Reporte_Canje_Puntos_Corporativo.pdf', 
         image: { type: 'jpeg', quality: 0.98 }, 
         html2canvas: { scale: 2, useCORS: true, scrollY: 0 }, 
         pagebreak: { mode: 'css', avoid: ['.evitar-corte'] }, 
@@ -357,18 +358,25 @@ try {
         const totalPages = pdf.internal.getNumberOfPages();
         for (let i = 1; i <= totalPages; i++) {
             pdf.setPage(i);
-            pdf.setDrawColor(200, 200, 200); pdf.setLineWidth(0.5); pdf.line(10, 280, 200, 280);
-            pdf.setFontSize(7.5); pdf.setTextColor(100, 100, 100);
+            
+            pdf.setDrawColor(200, 200, 200); 
+            pdf.setLineWidth(0.5); 
+            pdf.line(10, 280, 200, 280);
+            
+            pdf.setFontSize(7.5); 
+            pdf.setTextColor(100, 100, 100);
             
             const textoEmpresa = '<?php echo addslashes(strtoupper($negocio['nombre'])); ?>';
             const textoGenerador = '<?php echo addslashes($usuario_actual); ?>';
             
-            pdf.text('Reporte de Gastos - ' + textoEmpresa, 10, 284);
+            pdf.text('Reporte de Canjes - ' + textoEmpresa, 10, 284);
             pdf.text('Página ' + i + ' de ' + totalPages, 200, 284, { align: 'right' });
+            
             pdf.text('Emisión: <?php echo date('d/m/Y H:i'); ?> | Solicitado por: ' + textoGenerador, 10, 288);
 
             if (i < totalPages) {
-                pdf.setFont('helvetica', 'italic'); pdf.setTextColor(150, 150, 150);
+                pdf.setFont('helvetica', 'italic'); 
+                pdf.setTextColor(150, 150, 150);
                 pdf.text('Continúa en la página siguiente...', 105, 278, { align: 'center' });
             }
         }
@@ -388,7 +396,7 @@ try {
             cancelButtonText: 'Cerrar'
         }).then((result) => {
             if (result.isConfirmed) {
-                const msj = `📉 *REPORTE DE EGRESOS Y MERMAS*\n🏢 <?php echo $negocio['nombre']; ?>\n📅 Período: <?php echo $rango_texto; ?>\n📄 Ver online: ${window.location.href}`;
+                const msj = `🎁 *REPORTE DE CANJES DE PUNTOS*\n🏢 <?php echo $negocio['nombre']; ?>\n📅 Período: <?php echo $rango_texto; ?>\n📄 Ver online: ${window.location.href}`;
                 window.open(`https://wa.me/?text=${encodeURIComponent(msj)}`, '_blank');
             } else if (result.isDenied) {
                 enviarPorEmailReal();
@@ -406,7 +414,7 @@ try {
                     aplicarFormatoPaginas(pdf); return pdf.output('blob');
                 }).then(blob => {
                     let fData = new FormData();
-                    fData.append('email', email); fData.append('pdf_file', blob, 'Reporte_Gastos.pdf');
+                    fData.append('email', email); fData.append('pdf_file', blob, 'Reporte_Canjes.pdf');
                     return fetch('acciones/enviar_email_reporte_general.php', { method: 'POST', body: fData })
                     .then(r => { if(!r.ok) throw new Error(r.statusText); return r.json(); })
                     .catch(e => Swal.showValidationMessage(`Error: ${e}`));

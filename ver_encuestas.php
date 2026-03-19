@@ -10,8 +10,20 @@ foreach ($rutas_db as $ruta) { if (file_exists($ruta)) { require_once $ruta; bre
 
 if (!isset($_SESSION['usuario_id'])) { header("Location: index.php"); exit; }
 
+// --- CANDADOS DE SEGURIDAD ---
+$permisos = $_SESSION['permisos'] ?? [];
+$es_admin = (($_SESSION['rol'] ?? 3) <= 2);
+
+// Candado: Acceso a la página
+if (!$es_admin && !in_array('ver_encuestas', $permisos)) { 
+    header("Location: dashboard.php"); exit; 
+}
+
+$conf_rubro = $conexion->query("SELECT tipo_negocio FROM configuracion WHERE id=1")->fetch(PDO::FETCH_ASSOC);
+$rubro_actual = $conf_rubro['tipo_negocio'] ?? 'kiosco';
+
 // 2. CONSTRUIR FILTROS
-$where = "WHERE 1=1";
+$where = "WHERE (tipo_negocio = '$rubro_actual' OR tipo_negocio IS NULL)";
 $params = [];
 
 // A. Filtro por Fecha
@@ -34,6 +46,14 @@ if ($tipo === 'anonimo') {
     $where .= " AND cliente_nombre = 'Anónimo'";
 } elseif ($tipo === 'cliente') {
     $where .= " AND cliente_nombre != 'Anónimo'";
+}
+
+// D. Buscador de Texto (Buscador Rápido)
+$buscar = trim($_GET['buscar'] ?? '');
+if (!empty($buscar)) {
+    $where .= " AND (cliente_nombre LIKE ? OR comentario LIKE ?)";
+    $params[] = "%$buscar%";
+    $params[] = "%$buscar%";
 }
 
 // 3. CONSULTAS SQL DINÁMICAS Y WIDGETS
@@ -66,85 +86,66 @@ try {
 } catch (Exception $e) {
     $lista = []; $total = 0; $promedio = 0; $felices = 0;
 }
-// OBTENER COLOR SEGURO (ESTÁNDAR PREMIUM)
-$color_sistema = '#102A57';
-try {
-    $resColor = $conexion->query("SELECT color_principal FROM configuracion WHERE id=1");
-    if ($resColor) {
-        $dataC = $resColor->fetch(PDO::FETCH_ASSOC);
-        if (isset($dataC['color_principal'])) $color_sistema = $dataC['color_principal'];
-    }
-} catch (Exception $e) { }
+$conf_color_sis = $conexion->query("SELECT color_barra_nav FROM configuracion WHERE id=1")->fetch(PDO::FETCH_ASSOC);
+$color_sistema = $conf_color_sis['color_barra_nav'] ?? '#102A57';
+require_once 'includes/layout_header.php';
+
+// --- BANNER DINÁMICO ESTANDARIZADO ---
+$titulo = "Gestión de Opiniones";
+$subtitulo = "Lo que dicen tus clientes sobre el servicio.";
+$icono_bg = "bi-chat-quote-fill";
+
+$botones = [
+    ['texto' => 'VER FORMULARIO', 'link' => 'encuesta.php', 'icono' => 'bi-eye-fill', 'class' => 'btn btn-light text-primary fw-bold rounded-pill px-4 shadow-sm', 'target' => '_blank'],
+    ['texto' => 'REPORTE PDF', 'link' => 'reporte_encuestas.php?'.$_SERVER['QUERY_STRING'], 'icono' => 'bi-file-earmark-pdf-fill', 'class' => 'btn btn-danger fw-bold rounded-pill px-4 shadow-sm ms-2', 'target' => '_blank']
+];
+
+$widgets = [
+    ['label' => 'Opiniones (Filtro)', 'valor' => $total, 'icono' => 'bi-chat-left-text', 'icon_bg' => 'bg-white bg-opacity-10'],
+    ['label' => 'Calificación Promedio', 'valor' => number_format((float)$promedio, 1) . ' / 5', 'icono' => 'bi-star-half', 'icon_bg' => 'bg-warning bg-opacity-20'],
+    ['label' => 'Clientes Felices', 'valor' => $felices, 'icono' => 'bi-emoji-smile', 'border' => 'border-info', 'icon_bg' => 'bg-success bg-opacity-20']
+];
+
+include 'includes/componente_banner.php'; 
 ?>
 
-<?php include 'includes/layout_header.php'; ?></div>
-
-<div class="header-blue" style="background-color: <?php echo $color_sistema; ?> !important;">
-    <i class="bi bi-chat-quote-fill bg-icon-large"></i>
-    <div class="container position-relative">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-            <div>
-                <h2 class="font-cancha mb-0 text-white">Gestión de Opiniones</h2>
-                <p class="opacity-75 mb-0 text-white small">Lo que dicen tus clientes sobre el servicio.</p>
-            </div>
-            <a href="encuesta.php" target="_blank" class="btn btn-light text-primary fw-bold rounded-pill px-4 shadow-sm">
-                <i class="bi bi-eye-fill me-2"></i> VER FORMULARIO
-            </a>
-        </div>
-
-        <div class="row g-3">
-            <div class="col-12 col-md-4">
-                <div class="header-widget">
-                    <div>
-                        <div class="widget-label">Opiniones (Filtro)</div>
-                        <div class="widget-value text-white"><?php echo $total; ?></div>
-                    </div>
-                    <div class="icon-box bg-white bg-opacity-10 text-white">
-                        <i class="bi bi-chat-left-text"></i>
+<div class="container-fluid container-md mt-n4 px-3 mb-5" style="position: relative; z-index: 20;">
+    
+    <div class="card border-0 shadow-sm rounded-4 mb-3 bg-warning text-dark overflow-hidden" style="border: none !important; border-left: 5px solid #ff9800 !important;">
+        <div class="card-body p-2 p-md-3">
+            <form method="GET" class="row g-2 align-items-center mb-0">
+                <input type="hidden" name="fecha" value="<?php echo htmlspecialchars($fecha); ?>">
+                <input type="hidden" name="estrellas" value="<?php echo htmlspecialchars($estrellas); ?>">
+                <input type="hidden" name="tipo" value="<?php echo htmlspecialchars($tipo); ?>">
+                
+                <div class="col-md-8 col-12 text-center text-md-start">
+                    <h6 class="fw-bold mb-1 text-uppercase"><i class="bi bi-search me-2"></i>Buscador Rápido</h6>
+                    <p class="small mb-0 opacity-75 d-none d-md-block">Busca una opinión por nombre de cliente o comentario.</p>
+                </div>
+                <div class="col-md-4 col-12 text-end mt-2 mt-md-0">
+                    <div class="input-group input-group-sm">
+                        <input type="text" name="buscar" class="form-control border-0 fw-bold shadow-none" placeholder="Buscar opinión..." value="<?php echo htmlspecialchars($buscar); ?>">
+                        <button class="btn btn-dark px-3 shadow-none border-0" type="submit" style="border: none !important;"><i class="bi bi-arrow-right-circle-fill"></i></button>
                     </div>
                 </div>
-            </div>
-
-            <div class="col-12 col-md-4">
-                <div class="header-widget">
-                    <div>
-                        <div class="widget-label">Calificación Promedio</div>
-                        <div class="widget-value text-white"><?php echo number_format($promedio, 1); ?> <small style="font-size: 1rem; opacity: 0.6;">/ 5</small></div>
-                    </div>
-                    <div class="icon-box bg-warning bg-opacity-20 text-white">
-                        <i class="bi bi-star-half"></i>
-                    </div>
-                </div>
-            </div>
-
-            <div class="col-12 col-md-4">
-                <div class="header-widget border-info">
-                    <div>
-                        <div class="widget-label">Clientes Felices</div>
-                        <div class="widget-value text-white"><?php echo $felices; ?></div>
-                    </div>
-                    <div class="icon-box bg-success bg-opacity-20 text-white">
-                        <i class="bi bi-emoji-smile"></i>
-                    </div>
-                </div>
-            </div>
+            </form>
         </div>
     </div>
-</div>
 
-<div class="container pb-5">
-    
-    <div class="card border-0 shadow-sm rounded-4 mb-4 mt-3">
-        <div class="card-body p-4">
-            <form method="GET" class="row g-3 align-items-end">
-                <div class="col-md-3">
-                    <label class="form-label small fw-bold text-muted text-uppercase">📅 Fecha</label>
-                    <input type="date" name="fecha" class="form-control" value="<?php echo $fecha; ?>">
+    <div class="card border-0 shadow-sm rounded-4 mb-4">
+        <div class="card-body p-3">
+            <form method="GET" class="d-flex flex-wrap gap-2 align-items-end w-100">
+                <input type="hidden" name="buscar" value="<?php echo htmlspecialchars($buscar); ?>">
+                
+                <div class="flex-grow-1" style="min-width: 140px;">
+                    <label class="small fw-bold text-muted text-uppercase mb-1" style="font-size: 0.65rem;">Fecha</label>
+                    <input type="date" name="fecha" class="form-control form-control-sm border-light-subtle fw-bold" value="<?php echo htmlspecialchars($fecha); ?>">
                 </div>
-                <div class="col-md-3">
-                    <label class="form-label small fw-bold text-muted text-uppercase">⭐ Calificación</label>
-                    <select name="estrellas" class="form-select">
-                        <option value="">Todas</option>
+                
+                <div class="flex-grow-1" style="min-width: 150px;">
+                    <label class="small fw-bold text-muted text-uppercase mb-1" style="font-size: 0.65rem;">Calificación</label>
+                    <select name="estrellas" class="form-select form-select-sm border-light-subtle fw-bold">
+                        <option value="">Todas las estrellas</option>
                         <option value="5" <?php if($estrellas=='5') echo 'selected'; ?>>5 - Excelente (😍)</option>
                         <option value="4" <?php if($estrellas=='4') echo 'selected'; ?>>4 - Buena (🙂)</option>
                         <option value="3" <?php if($estrellas=='3') echo 'selected'; ?>>3 - Normal (😐)</option>
@@ -152,19 +153,23 @@ try {
                         <option value="1" <?php if($estrellas=='1') echo 'selected'; ?>>1 - Mala (😡)</option>
                     </select>
                 </div>
-                <div class="col-md-3">
-                    <label class="form-label small fw-bold text-muted text-uppercase">👤 Origen</label>
-                    <select name="tipo" class="form-select">
-                        <option value="">Todos</option>
-                        <option value="anonimo" <?php if($tipo=='anonimo') echo 'selected'; ?>>Anónimos</option>
+                
+                <div class="flex-grow-1" style="min-width: 150px;">
+                    <label class="small fw-bold text-muted text-uppercase mb-1" style="font-size: 0.65rem;">Origen</label>
+                    <select name="tipo" class="form-select form-select-sm border-light-subtle fw-bold">
+                        <option value="">Todos los orígenes</option>
+                        <option value="anonimo" <?php if($tipo=='anonimo') echo 'selected'; ?>>Clientes Anónimos</option>
                         <option value="cliente" <?php if($tipo=='cliente') echo 'selected'; ?>>Clientes Identificados</option>
                     </select>
                 </div>
-                <div class="col-md-3 d-flex gap-2">
-                    <button type="submit" class="btn btn-dark w-100 fw-bold rounded-3"><i class="bi bi-filter"></i> FILTRAR</button>
-                    <?php if($fecha || $estrellas || $tipo): ?>
-                        <a href="ver_encuestas.php" class="btn btn-outline-secondary rounded-3" title="Limpiar"><i class="bi bi-x-lg"></i></a>
-                    <?php endif; ?>
+
+                <div class="flex-grow-0 d-flex gap-2 mt-2 mt-md-0">
+                    <button type="submit" class="btn btn-primary btn-sm fw-bold rounded-3 shadow-sm px-3" style="height: 31px;">
+                        <i class="bi bi-funnel-fill me-1"></i> FILTRAR
+                    </button>
+                    <a href="ver_encuestas.php" class="btn btn-light btn-sm fw-bold rounded-3 border px-3" style="height: 31px; display: flex; align-items: center;">
+                        <i class="bi bi-trash3-fill me-1"></i> LIMPIAR
+                    </a>
                 </div>
             </form>
         </div>

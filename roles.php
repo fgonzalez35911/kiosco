@@ -13,11 +13,19 @@ $rol_usuario_actual = $stmtCheck->fetchColumn();
 
 if($rol_usuario_actual > 2) { header("Location: dashboard.php"); exit; }
 
-// 1. PROCESAR GUARDADO
+// 1. PROCESAR GUARDADO (CON AUDITORÍA DE LLAVES)
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['guardar_permisos'])) {
     $id_rol = $_POST['id_rol'];
     $permisos_seleccionados = $_POST['permisos'] ?? [];
     try {
+        // Obtener nombre del rol
+        $nombre_rol = $conexion->query("SELECT nombre FROM roles WHERE id = $id_rol")->fetchColumn();
+
+        // Obtener permisos viejos
+        $stmtOldP = $conexion->prepare("SELECT p.clave FROM rol_permisos rp JOIN permisos p ON rp.id_permiso = p.id WHERE rp.id_rol = ?");
+        $stmtOldP->execute([$id_rol]);
+        $oldPerms = $stmtOldP->fetchAll(PDO::FETCH_COLUMN);
+
         $conexion->beginTransaction();
         $conexion->prepare("DELETE FROM rol_permisos WHERE id_rol = ?")->execute([$id_rol]);
         if (!empty($permisos_seleccionados)) {
@@ -25,6 +33,25 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['guardar_permisos'])) {
             foreach ($permisos_seleccionados as $p_id) { $stmtIns->execute([$id_rol, $p_id]); }
         }
         $conexion->commit();
+
+        // Obtener permisos nuevos
+        $stmtNewP = $conexion->prepare("SELECT p.clave FROM rol_permisos rp JOIN permisos p ON rp.id_permiso = p.id WHERE rp.id_rol = ?");
+        $stmtNewP->execute([$id_rol]);
+        $newPerms = $stmtNewP->fetchAll(PDO::FETCH_COLUMN);
+
+        // Comparación inteligente
+        $agregados = array_diff($newPerms, $oldPerms);
+        $quitados = array_diff($oldPerms, $newPerms);
+
+        $cambios = [];
+        if(!empty($agregados)) $cambios[] = "➕ Permisos Agregados: [" . implode(", ", $agregados) . "]";
+        if(!empty($quitados)) $cambios[] = "❌ Permisos Quitados: [" . implode(", ", $quitados) . "]";
+
+        if(!empty($cambios)) {
+            $d_aud = "Seguridad del Rol '" . strtoupper($nombre_rol) . "' modificada | " . implode(" | ", $cambios); 
+            $conexion->prepare("INSERT INTO auditoria (id_usuario, accion, detalles, fecha) VALUES (?, 'ROL_ACTUALIZADO', ?, NOW())")->execute([$_SESSION['usuario_id'], $d_aud]);
+        }
+
         header("Location: roles.php?msg=ok"); exit;
     } catch (Exception $e) { $conexion->rollBack(); die("Error: " . $e->getMessage()); }
 }
@@ -51,10 +78,10 @@ foreach ($asignados as $a) { $mapa_permisos[$a['id_rol']][] = $a['id_permiso']; 
 // OBTENER COLOR SEGURO (ESTÁNDAR PREMIUM)
 $color_sistema = '#102A57';
 try {
-    $resColor = $conexion->query("SELECT color_principal FROM configuracion WHERE id=1");
+    $resColor = $conexion->query("SELECT color_barra_nav FROM configuracion WHERE id=1");
     if ($resColor) {
         $dataC = $resColor->fetch(PDO::FETCH_ASSOC);
-        if (isset($dataC['color_principal'])) $color_sistema = $dataC['color_principal'];
+        if (isset($dataC['color_barra_nav'])) $color_sistema = $dataC['color_barra_nav'];
     }
 } catch (Exception $e) { }
 
@@ -63,7 +90,7 @@ try {
 <?php include 'includes/layout_header.php'; ?></div>
 
 
-<div class="header-blue" style="background-color: <?php echo $color_sistema; ?> !important;">
+<div class="header-blue" style="background: <?php echo $color_sistema; ?> !important; border-radius: 0 !important; width: 100vw; margin-left: calc(-50vw + 50%); padding: 40px 0; position: relative; overflow: hidden;">
     <i class="bi bi-shield-lock-fill bg-icon-large"></i>
     <div class="container position-relative">
         <div class="d-flex justify-content-between align-items-start mb-4">
@@ -177,10 +204,10 @@ try {
                                 <div class="permiso-item">
                                     <div class="form-check form-switch mb-0">
                                         <input class="form-check-input" type="checkbox" name="permisos[]" value="<?php echo $p['id']; ?>" id="chk_<?php echo $p['id']; ?>">
-                                        <label class="form-check-label fw-bold d-block" for="chk_<?php echo $p['id']; ?>" style="cursor:pointer; font-size: 0.85rem;">
-                                            <?php echo str_replace('_', ' ', strtoupper($p['clave'])); ?>
+                                        <label class="form-check-label fw-bold d-block text-dark" for="chk_<?php echo $p['id']; ?>" style="cursor:pointer; font-size: 0.85rem;">
+                                            <?php echo htmlspecialchars($p['descripcion']); ?>
                                         </label>
-                                        <small class="text-muted d-block" style="font-size: 0.7rem; line-height: 1.1;"><?php echo htmlspecialchars($p['descripcion']); ?></small>
+                                        <small class="text-muted d-block" style="font-size: 0.7rem; line-height: 1.1;">[ <?php echo strtoupper($p['clave']); ?> ]</small>
                                     </div>
                                 </div>
                             </div>

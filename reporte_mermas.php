@@ -1,5 +1,5 @@
 <?php
-// reporte_gastos.php - VERSIÓN VANGUARD PRO (FLUJO NATIVO + GRÁFICOS)
+// reporte_mermas.php - VERSIÓN VANGUARD PRO (FLUJO NATIVO + GRÁFICOS)
 session_start();
 $es_publico = isset($_GET['publico']) && $_GET['publico'] == '1';
 if (!isset($_SESSION['usuario_id']) && !$es_publico) { header("Location: index.php"); exit; }
@@ -10,18 +10,18 @@ try {
     $negocio = [
         'nombre' => $conf['nombre_negocio'] ?? 'EMPRESA',
         'direccion' => $conf['direccion_local'] ?? '',
-        'logo' => $conf['logo_url'] ?? '',
-        'cuit' => $conf['cuit'] ?? 'S/D'
+        'cuit' => $conf['cuit'] ?? 'S/D',
+        'logo' => $conf['logo_url'] ?? ''
     ];
-    
+
     // 1. Datos del Operador
-    $id_operador = $_SESSION['usuario_id'] ?? ($_GET['gen_by'] ?? 1);
+    $id_operador_gen = $_SESSION['usuario_id'] ?? ($_GET['gen_by'] ?? 1);
     $u_op = $conexion->prepare("SELECT usuario FROM usuarios WHERE id = ?");
-    $u_op->execute([$id_operador]);
+    $u_op->execute([$id_operador_gen]);
     $operadorRow = $u_op->fetch(PDO::FETCH_ASSOC);
     $usuario_actual = strtoupper($operadorRow['usuario'] ?? 'S/D');
 
-    // 2. Datos del Dueño para Firma
+    // 2. Datos del Dueño para la Firma
     $u_owner = $conexion->query("SELECT u.id, u.nombre_completo, r.nombre as nombre_rol 
                                  FROM usuarios u 
                                  JOIN roles r ON u.id_rol = r.id 
@@ -29,7 +29,7 @@ try {
     $ownerRow = $u_owner->fetch(PDO::FETCH_ASSOC);
     $firmante = $ownerRow ? $ownerRow : ['nombre_completo' => 'RESPONSABLE', 'nombre_rol' => 'AUTORIZADO', 'id' => 0];
 
-    // 3. Firma en Base64
+    // 3. Firma física en Base64
     $firmaUsuario = ""; 
     if($ownerRow && file_exists("img/firmas/usuario_{$ownerRow['id']}.png")) {
         $firmaUsuario = 'data:image/png;base64,' . base64_encode(file_get_contents("img/firmas/usuario_{$ownerRow['id']}.png"));
@@ -37,68 +37,61 @@ try {
         $firmaUsuario = 'data:image/png;base64,' . base64_encode(file_get_contents("img/firmas/firma_admin.png"));
     }
 
+    // Filtros
     $desde = $_GET['desde'] ?? date('Y-m-d', strtotime('-2 months'));
     $hasta = $_GET['hasta'] ?? date('Y-m-d');
-    $f_cat = $_GET['categoria_filtro'] ?? '';
     $f_usu = $_GET['id_usuario'] ?? '';
     $buscar = trim($_GET['buscar'] ?? '');
 
-    $condG = ["DATE(g.fecha) >= ?", "DATE(g.fecha) <= ?"];
-    $paramsG = [$desde, $hasta];
-    if($f_cat !== '' && $f_cat !== 'Mermas') { $condG[] = "g.categoria = ?"; $paramsG[] = $f_cat; }
-    if($f_usu !== '') { $condG[] = "g.id_usuario = ?"; $paramsG[] = $f_usu; }
-    if(!empty($buscar)) { $condG[] = "(g.descripcion LIKE ? OR g.id = ?)"; array_push($paramsG, "%$buscar%", intval($buscar)); }
+    $condiciones = ["DATE(m.fecha) >= ?", "DATE(m.fecha) <= ?", "m.motivo NOT LIKE 'Devolución #%'"];
+    $parametros = [$desde, $hasta];
+    if($f_usu !== '') { $condiciones[] = "m.id_usuario = ?"; $parametros[] = $f_usu; }
+    
+    if(!empty($buscar)) { 
+        $condiciones[] = "(p.descripcion LIKE ? OR m.motivo LIKE ? OR m.id = ?)"; 
+        array_push($parametros, "%$buscar%", "%$buscar%", intval($buscar)); 
+    }
 
-    $condM = ["DATE(m.fecha) >= ?", "DATE(m.fecha) <= ?", "m.motivo NOT LIKE 'Devolución #%'"];
-    $paramsM = [$desde, $hasta];
-    if($f_usu !== '') { $condM[] = "m.id_usuario = ?"; $paramsM[] = $f_usu; }
-    if($f_cat !== '' && $f_cat !== 'Mermas') { $condM[] = "1=0"; } 
-    if(!empty($buscar)) { $condM[] = "(m.motivo LIKE ? OR m.id = ?)"; array_push($paramsM, "%$buscar%", intval($buscar)); }
-
-    // Consulta unificada de Egresos
-    $sql = "(SELECT g.id, g.monto, g.categoria, g.fecha, g.descripcion, u.usuario, 'gasto' as tipo
-             FROM gastos g JOIN usuarios u ON g.id_usuario = u.id 
-             WHERE " . implode(" AND ", $condG) . ")
-            UNION 
-            (SELECT m.id, (m.cantidad * p.precio_costo) as monto, 'Mermas' as categoria, m.fecha, m.motivo as descripcion, u.usuario, 'merma' as tipo
-             FROM mermas m 
-             JOIN usuarios u ON m.id_usuario = u.id 
-             JOIN productos p ON m.id_producto = p.id
-             WHERE " . implode(" AND ", $condM) . ")
-            ORDER BY fecha DESC";
-
+    // Consulta de Flujo Continuo
+    $sql = "SELECT m.*, p.descripcion, p.precio_costo, u.usuario 
+            FROM mermas m 
+            JOIN productos p ON m.id_producto = p.id 
+            JOIN usuarios u ON m.id_usuario = u.id 
+            WHERE " . implode(" AND ", $condiciones) . " 
+            ORDER BY m.fecha DESC";
     $stmt = $conexion->prepare($sql);
-    $stmt->execute(array_merge($paramsG, $paramsM));
+    $stmt->execute($parametros);
     $registros = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     $rango_texto = ($desde == $hasta) ? date('d/m/Y', strtotime($desde)) : date('d/m/Y', strtotime($desde)) . " al " . date('d/m/Y', strtotime($hasta));
     
-    // --- CÁLCULOS DE RESUMEN EJECUTIVO Y GRÁFICOS ---
-    $totalEgresos = 0;
-    $gastos_categoria = [];
-    $gastos_operador = [];
+    // --- CÁLCULOS ESTADÍSTICOS PARA RESUMEN Y GRÁFICOS ---
+    $totalPerdida = 0;
+    $total_mermas = count($registros);
+    $mermas_producto = [];
+    $mermas_motivo = [];
 
     foreach($registros as $r) {
-        $monto = floatval($r['monto']);
-        $totalEgresos += $monto;
+        $perdida = floatval($r['cantidad']) * floatval($r['precio_costo']);
+        $totalPerdida += $perdida;
 
-        // Para gráfico circular (Categorías)
-        $cat = strtoupper($r['categoria']);
-        if(!isset($gastos_categoria[$cat])) { $gastos_categoria[$cat] = 0; }
-        $gastos_categoria[$cat] += $monto;
+        // Agrupar para Gráfico de Barras (Productos que más dinero pierden)
+        $prod = strtoupper($r['descripcion']);
+        if(!isset($mermas_producto[$prod])) { $mermas_producto[$prod] = 0; }
+        $mermas_producto[$prod] += $perdida;
 
-        // Para gráfico de barras (Operadores)
-        $usu = strtoupper($r['usuario']);
-        if(!isset($gastos_operador[$usu])) { $gastos_operador[$usu] = 0; }
-        $gastos_operador[$usu] += $monto;
+        // Agrupar para Gráfico Circular (Frecuencia de Motivos)
+        $motivo = strtoupper($r['motivo'] ?? 'OTROS');
+        if(!isset($mermas_motivo[$motivo])) { $mermas_motivo[$motivo] = 0; }
+        $mermas_motivo[$motivo]++;
     }
-    arsort($gastos_categoria);
-    arsort($gastos_operador);
+    arsort($mermas_producto);
+    arsort($mermas_motivo);
 
     $url_actual = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[REQUEST_URI]";
     if (strpos($url_actual, 'publico=1') === false) {
         $separador = parse_url($url_actual, PHP_URL_QUERY) ? '&' : '?';
-        $url_publica = $url_actual . $separador . 'publico=1&gen_by=' . $id_operador;
+        $url_publica = $url_actual . $separador . 'publico=1&gen_by=' . $id_operador_gen;
     } else {
         $url_publica = $url_actual;
     }
@@ -110,7 +103,7 @@ try {
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Reporte Gastos - Vanguard Pro</title>
+    <title>Reporte de Mermas - Vanguard Pro</title>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
     
@@ -128,7 +121,7 @@ try {
         
         /* ESTRUCTURA NATIVA PARA EVITAR CORTES DE TABLA */
         table { width: 100%; border-collapse: collapse; margin-bottom: 15px; table-layout: fixed; }
-        th { background: #102A57; color: white !important; padding: 10px; text-align: left; font-size: 9pt; white-space: nowrap; }
+        th { background: #102A57; color: white !important; padding: 10px; text-align: left; font-size: 9pt; white-space: nowrap; text-transform: uppercase; }
         td { border-bottom: 1px solid #eee; padding: 10px; font-size: 8.5pt; vertical-align: top; word-wrap: break-word; }
         
         thead { display: table-header-group; } 
@@ -158,7 +151,7 @@ try {
         <table>
             <thead>
                 <tr>
-                    <td colspan="4" style="border:none; padding:0; background:white;">
+                    <td colspan="6" style="border:none; padding:0; background:white;">
                         <header>
                             <div style="width: 20%; text-align: left;">
                                 <?php if(!empty($negocio['logo'])): ?>
@@ -171,65 +164,65 @@ try {
                                 <p style="font-size: 9pt; margin: 0;"><strong>CUIT: <?php echo $negocio['cuit']; ?></strong></p>
                             </div>
                             <div style="text-align: right; width: 30%; font-size: 8pt; color: #333; font-weight: normal;">
-                                <strong>REPORTE DE EGRESOS</strong><br><?php echo $rango_texto; ?><br>
+                                <strong>REPORTE DE MERMAS</strong><br><?php echo $rango_texto; ?><br>
                                 <strong style="color:#102A57;">EMISIÓN: <?php echo date('d/m/Y H:i'); ?></strong>
                             </div>
                         </header>
                         <h3 style="color: #102A57; border-left: 5px solid #102A57; padding-left: 10px; margin-bottom: 20px; margin-top:0; text-transform: uppercase; font-size: 11pt;">
-                            Detalle de Gastos y Mermas
+                            Detalle de Bajas de Inventario
                         </h3>
                     </td>
                 </tr>
                 <tr>
                     <th style="width: 15%;">FECHA</th>
-                    <th style="width: 45%;">CONCEPTO / OPERADOR</th>
-                    <th style="width: 20%;">CATEGORÍA</th>
-                    <th style="width: 20%; text-align: right;">MONTO</th>
+                    <th style="width: 15%;">OPERADOR</th>
+                    <th style="width: 30%;">PRODUCTO</th>
+                    <th style="width: 20%;">MOTIVO</th>
+                    <th style="width: 5%; text-align: center;">CANT.</th>
+                    <th style="width: 15%; text-align: right;">PÉRDIDA</th>
                 </tr>
             </thead>
             
             <tbody>
-                <?php if(count($registros) > 0): ?>
-                    <?php foreach($registros as $r): ?>
+                <?php if($total_mermas > 0): ?>
+                    <?php foreach($registros as $r): 
+                        $perdida_fila = $r['cantidad'] * $r['precio_costo'];
+                    ?>
                     <tr class="evitar-corte">
                         <td><?php echo date('d/m/y H:i', strtotime($r['fecha'])); ?></td>
-                        <td><strong><?php echo strtoupper($r['descripcion']); ?></strong><br><small style="color:#666;">Operador: <?php echo strtoupper($r['usuario']); ?></small></td>
-                        <td>
-                            <?php if($r['categoria'] == 'Mermas'): ?>
-                                <span style="background: #f8d7da; color:#dc3545; padding: 2px 6px; border-radius: 4px; font-size: 8pt; font-weight: bold;">MERMA</span>
-                            <?php else: ?>
-                                <span style="background: #eee; padding: 2px 6px; border-radius: 4px; font-size: 8pt; font-weight: bold;"><?php echo strtoupper($r['categoria']); ?></span>
-                            <?php endif; ?>
-                        </td>
-                        <td style="text-align: right; font-weight: bold; color:#dc3545;">-$<?php echo number_format($r['monto'], 2, ',', '.'); ?></td>
+                        <td style="font-weight: bold; color: #444;"><?php echo strtoupper($r['usuario']); ?></td>
+                        <td><strong><?php echo strtoupper($r['descripcion']); ?></strong></td>
+                        <td><span style="background: #eee; padding: 2px 6px; border-radius: 4px; font-size: 8pt;"><?php echo $r['motivo']; ?></span></td>
+                        <td style="text-align: center; font-weight: bold;">-<?php echo floatval($r['cantidad']); ?></td>
+                        <td style="text-align: right; font-weight: bold; color:#dc3545;">-$<?php echo number_format($perdida_fila, 2, ',', '.'); ?></td>
                     </tr>
                     <?php endforeach; ?>
                     
                     <tr class="evitar-corte">
-                        <td colspan="4" style="text-align: center; padding: 40px 20px; color: #a0a0a0; border-top: 2px dashed #e0e0e0;">
-                            <i class="bi bi-wallet2" style="font-size: 28pt; display: block; margin-bottom: 10px; color: #d0d0d0;"></i>
-                            <span style="font-size: 10pt; font-weight: bold; text-transform: uppercase; letter-spacing: 2px;">Fin de Registros de Egresos</span>
+                        <td colspan="6" style="text-align: center; padding: 40px 20px; color: #a0a0a0; border-top: 2px dashed #e0e0e0;">
+                            <i class="bi bi-trash3" style="font-size: 28pt; display: block; margin-bottom: 10px; color: #d0d0d0;"></i>
+                            <span style="font-size: 10pt; font-weight: bold; text-transform: uppercase; letter-spacing: 2px;">Fin de Registros de Mermas</span>
                         </td>
                     </tr>
                 <?php else: ?>
-                    <tr><td colspan="4" style="text-align:center; padding: 30px; color:#666;">No hubo egresos en este periodo.</td></tr>
+                    <tr><td colspan="6" style="text-align:center; padding: 30px; color:#666;">No hubo mermas registradas en este periodo.</td></tr>
                 <?php endif; ?>
             </tbody>
         </table>
 
-        <?php if(count($registros) > 0): ?>
+        <?php if($total_mermas > 0): ?>
         <div class="evitar-corte" style="margin-top: 30px;">
             <div class="resumen-card">
-                <h4 style="color: #102A57; border-bottom: 2px solid #102A57; padding-bottom: 5px; margin-bottom: 15px; margin-top:0; text-transform: uppercase; font-size: 11pt;">Resumen Ejecutivo de Egresos</h4>
+                <h4 style="color: #102A57; border-bottom: 2px solid #102A57; padding-bottom: 5px; margin-bottom: 15px; margin-top:0; text-transform: uppercase; font-size: 11pt;">Resumen Ejecutivo de Pérdidas</h4>
                 
                 <div style="display: flex; gap: 20px; margin-bottom: 20px;">
                     <div style="flex: 1; background: white; padding: 10px; border-radius: 5px; border: 1px solid #ddd; text-align: center;">
                         <small style="color: #666; font-weight: bold; text-transform: uppercase; font-size: 7pt;">Movimientos Totales</small>
-                        <div style="font-size: 16pt; font-weight: 900; color: #102A57;"><?php echo count($registros); ?></div>
+                        <div style="font-size: 16pt; font-weight: 900; color: #102A57;"><?php echo $total_mermas; ?></div>
                     </div>
                     <div style="flex: 1; background: #fdf2f2; padding: 10px; border-radius: 5px; border: 1px solid #dc3545; text-align: center;">
-                        <small style="color: #dc3545; font-weight: bold; text-transform: uppercase; font-size: 7pt;">Egreso Bruto Consolidado</small>
-                        <div style="font-size: 16pt; font-weight: 900; color: #dc3545;">-$<?php echo number_format($totalEgresos, 2, ',', '.'); ?></div>
+                        <small style="color: #dc3545; font-weight: bold; text-transform: uppercase; font-size: 7pt;">Pérdida Valorizada Total</small>
+                        <div style="font-size: 16pt; font-weight: 900; color: #dc3545;">-$<?php echo number_format($totalPerdida, 2, ',', '.'); ?></div>
                     </div>
                 </div>
 
@@ -237,24 +230,24 @@ try {
                 
                 <div style="display: flex; justify-content: space-between; gap: 15px; width: 100%; box-sizing: border-box;">
                     <div style="flex: 1; background: white; padding: 15px; border-radius: 5px; border: 1px solid #ddd; box-sizing: border-box;">
-                        <strong style="font-size: 8pt; color: #666; text-transform: uppercase; display:block; text-align:center; margin-bottom:10px;">Egresos por Operador ($)</strong>
-                        <div style="position: relative; height: 220px; width: 100%;"><canvas id="chartOperador"></canvas></div>
+                        <strong style="font-size: 8pt; color: #666; text-transform: uppercase; display:block; text-align:center; margin-bottom:10px;">Top Productos con Pérdida ($)</strong>
+                        <div style="position: relative; height: 220px; width: 100%;"><canvas id="chartProductos"></canvas></div>
                     </div>
                     <div style="flex: 1; background: white; padding: 15px; border-radius: 5px; border: 1px solid #ddd; box-sizing: border-box;">
-                        <strong style="font-size: 8pt; color: #666; text-transform: uppercase; display:block; text-align:center; margin-bottom:10px;">Distribución de Gastos</strong>
-                        <div style="position: relative; height: 220px; width: 100%;"><canvas id="chartCategoria"></canvas></div>
+                        <strong style="font-size: 8pt; color: #666; text-transform: uppercase; display:block; text-align:center; margin-bottom:10px;">Frecuencia de Motivos</strong>
+                        <div style="position: relative; height: 220px; width: 100%;"><canvas id="chartMotivos"></canvas></div>
                     </div>
                 </div>
             </div>
             
             <script> 
-                const datosOperador = <?php echo json_encode($gastos_operador); ?>; 
-                const datosCategoria = <?php echo json_encode($gastos_categoria); ?>; 
+                const datosProductos = <?php echo json_encode($mermas_producto); ?>; 
+                const datosMotivos = <?php echo json_encode($mermas_motivo); ?>; 
             </script>
 
             <div class="footer-section">
                 <div style="width: 40%; font-size: 8pt; color: #666; line-height: 1.4; text-align: justify;">
-                    <p><strong>DECLARACIÓN JURADA:</strong> Este reporte refleja fielmente las salidas de dinero (gastos) y el costo asociado a las mermas de inventario registradas en el sistema.</p>
+                    <p><strong>DECLARACIÓN JURADA:</strong> Este reporte refleja fielmente las bajas de inventario y la pérdida de capital a precio de costo registradas en el sistema. Su validez puede ser verificada escaneando el código QR.</p>
                 </div>
                 <div style="width: 30%; text-align: center;">
                     <img src="<?php echo $qr_url; ?>" style="width: 75px; height: 75px; border: 1px solid #ccc; padding: 2px;">
@@ -278,21 +271,21 @@ try {
 
     <script>
     document.addEventListener("DOMContentLoaded", function() {
-        // Gráfico de Barras: Operadores
-        if(typeof datosOperador !== 'undefined' && Object.keys(datosOperador).length > 0) {
-            const allLabelsOp = Object.keys(datosOperador);
-            const labelsOp = allLabelsOp.slice(0, 6).map(l => l.length > 13 ? l.substring(0, 13) + '...' : l);
-            const dataOp = allLabelsOp.slice(0, 6).map(l => datosOperador[l]);
+        // Gráfico de Barras: Productos que generan más pérdida
+        if(typeof datosProductos !== 'undefined' && Object.keys(datosProductos).length > 0) {
+            const allLabelsProd = Object.keys(datosProductos);
+            const labelsProd = allLabelsProd.slice(0, 6).map(l => l.length > 13 ? l.substring(0, 13) + '...' : l);
+            const dataProd = allLabelsProd.slice(0, 6).map(l => datosProductos[l]);
 
-            if(document.getElementById('chartOperador')) {
-                new Chart(document.getElementById('chartOperador'), {
+            if(document.getElementById('chartProductos')) {
+                new Chart(document.getElementById('chartProductos'), {
                     type: 'bar',
                     data: { 
-                        labels: labelsOp, 
+                        labels: labelsProd, 
                         datasets: [{ 
-                            label: 'Egresos ($)', 
-                            data: dataOp, 
-                            backgroundColor: '#dc3545', 
+                            label: 'Pérdida ($)', 
+                            data: dataProd, 
+                            backgroundColor: '#dc3545', // Rojo para alerta de mermas
                             borderRadius: 4,
                             maxBarThickness: 35 
                         }] 
@@ -310,20 +303,20 @@ try {
             }
         }
 
-        // Gráfico Circular: Categorías
-        if(typeof datosCategoria !== 'undefined' && Object.keys(datosCategoria).length > 0) {
-            const allLabelsCat = Object.keys(datosCategoria);
-            const labelsCat = allLabelsCat.slice(0, 6).map(l => l.length > 15 ? l.substring(0, 15) + '...' : l);
-            const dataCat = allLabelsCat.slice(0, 6).map(l => datosCategoria[l]);
+        // Gráfico Circular: Motivos de la Merma
+        if(typeof datosMotivos !== 'undefined' && Object.keys(datosMotivos).length > 0) {
+            const allLabelsMot = Object.keys(datosMotivos);
+            const labelsMot = allLabelsMot.slice(0, 6).map(l => l.length > 15 ? l.substring(0, 15) + '...' : l);
+            const dataMot = allLabelsMot.slice(0, 6).map(l => datosMotivos[l]);
             
-            const coloresCat = ['#102A57', '#fd7e14', '#198754', '#ffc107', '#0dcaf0', '#6c757d'];
+            const coloresMot = ['#dc3545', '#fd7e14', '#102A57', '#ffc107', '#6c757d', '#212529'];
 
-            if(document.getElementById('chartCategoria')) {
-                new Chart(document.getElementById('chartCategoria'), {
+            if(document.getElementById('chartMotivos')) {
+                new Chart(document.getElementById('chartMotivos'), {
                     type: 'doughnut',
                     data: { 
-                        labels: labelsCat, 
-                        datasets: [{ data: dataCat, backgroundColor: coloresCat, borderWidth: 1 }] 
+                        labels: labelsMot, 
+                        datasets: [{ data: dataMot, backgroundColor: coloresMot, borderWidth: 1 }] 
                     },
                     options: { 
                         layout: { padding: { bottom: 10 } },
@@ -339,7 +332,7 @@ try {
     // MÁRGENES DE TITANIO VANGUARD PRO
     const optGlobal = { 
         margin: [15, 10, 25, 10], 
-        filename: 'Reporte_Gastos_Corporativo.pdf', 
+        filename: 'Reporte_Mermas_Corporativo.pdf', 
         image: { type: 'jpeg', quality: 0.98 }, 
         html2canvas: { scale: 2, useCORS: true, scrollY: 0 }, 
         pagebreak: { mode: 'css', avoid: ['.evitar-corte'] }, 
@@ -357,18 +350,25 @@ try {
         const totalPages = pdf.internal.getNumberOfPages();
         for (let i = 1; i <= totalPages; i++) {
             pdf.setPage(i);
-            pdf.setDrawColor(200, 200, 200); pdf.setLineWidth(0.5); pdf.line(10, 280, 200, 280);
-            pdf.setFontSize(7.5); pdf.setTextColor(100, 100, 100);
+            
+            pdf.setDrawColor(220, 53, 69); // Línea Roja inferior como detalle estético para Mermas
+            pdf.setLineWidth(0.5); 
+            pdf.line(10, 280, 200, 280);
+            
+            pdf.setFontSize(7.5); 
+            pdf.setTextColor(100, 100, 100);
             
             const textoEmpresa = '<?php echo addslashes(strtoupper($negocio['nombre'])); ?>';
             const textoGenerador = '<?php echo addslashes($usuario_actual); ?>';
             
-            pdf.text('Reporte de Gastos - ' + textoEmpresa, 10, 284);
+            pdf.text('Reporte de Mermas - ' + textoEmpresa, 10, 284);
             pdf.text('Página ' + i + ' de ' + totalPages, 200, 284, { align: 'right' });
+            
             pdf.text('Emisión: <?php echo date('d/m/Y H:i'); ?> | Solicitado por: ' + textoGenerador, 10, 288);
 
             if (i < totalPages) {
-                pdf.setFont('helvetica', 'italic'); pdf.setTextColor(150, 150, 150);
+                pdf.setFont('helvetica', 'italic'); 
+                pdf.setTextColor(150, 150, 150);
                 pdf.text('Continúa en la página siguiente...', 105, 278, { align: 'center' });
             }
         }
@@ -388,7 +388,7 @@ try {
             cancelButtonText: 'Cerrar'
         }).then((result) => {
             if (result.isConfirmed) {
-                const msj = `📉 *REPORTE DE EGRESOS Y MERMAS*\n🏢 <?php echo $negocio['nombre']; ?>\n📅 Período: <?php echo $rango_texto; ?>\n📄 Ver online: ${window.location.href}`;
+                const msj = `📉 *REPORTE DE MERMAS Y BAJAS*\n🏢 <?php echo $negocio['nombre']; ?>\n📅 Período: <?php echo $rango_texto; ?>\n📄 Ver online: ${window.location.href}`;
                 window.open(`https://wa.me/?text=${encodeURIComponent(msj)}`, '_blank');
             } else if (result.isDenied) {
                 enviarPorEmailReal();
@@ -406,7 +406,7 @@ try {
                     aplicarFormatoPaginas(pdf); return pdf.output('blob');
                 }).then(blob => {
                     let fData = new FormData();
-                    fData.append('email', email); fData.append('pdf_file', blob, 'Reporte_Gastos.pdf');
+                    fData.append('email', email); fData.append('pdf_file', blob, 'Reporte_Mermas.pdf');
                     return fetch('acciones/enviar_email_reporte_general.php', { method: 'POST', body: fData })
                     .then(r => { if(!r.ok) throw new Error(r.statusText); return r.json(); })
                     .catch(e => Swal.showValidationMessage(`Error: ${e}`));

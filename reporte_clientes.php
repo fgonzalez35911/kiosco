@@ -1,5 +1,5 @@
 <?php
-// reporte_gastos.php - VERSIÓN VANGUARD PRO (FLUJO NATIVO + GRÁFICOS)
+// reporte_clientes.php - VERSIÓN VANGUARD PRO (FLUJO NATIVO + GRÁFICOS)
 session_start();
 $es_publico = isset($_GET['publico']) && $_GET['publico'] == '1';
 if (!isset($_SESSION['usuario_id']) && !$es_publico) { header("Location: index.php"); exit; }
@@ -10,10 +10,11 @@ try {
     $negocio = [
         'nombre' => $conf['nombre_negocio'] ?? 'EMPRESA',
         'direccion' => $conf['direccion_local'] ?? '',
-        'logo' => $conf['logo_url'] ?? '',
-        'cuit' => $conf['cuit'] ?? 'S/D'
+        'telefono' => $conf['telefono_whatsapp'] ?? '',
+        'cuit' => $conf['cuit'] ?? 'S/D',
+        'logo' => $conf['logo_url'] ?? ''
     ];
-    
+
     // 1. Datos del Operador
     $id_operador = $_SESSION['usuario_id'] ?? ($_GET['gen_by'] ?? 1);
     $u_op = $conexion->prepare("SELECT usuario FROM usuarios WHERE id = ?");
@@ -23,13 +24,12 @@ try {
 
     // 2. Datos del Dueño para Firma
     $u_owner = $conexion->query("SELECT u.id, u.nombre_completo, r.nombre as nombre_rol 
-                                 FROM usuarios u 
-                                 JOIN roles r ON u.id_rol = r.id 
+                                 FROM usuarios u JOIN roles r ON u.id_rol = r.id 
                                  WHERE r.nombre = 'dueño' OR r.nombre = 'DUEÑO' LIMIT 1");
     $ownerRow = $u_owner->fetch(PDO::FETCH_ASSOC);
     $firmante = $ownerRow ? $ownerRow : ['nombre_completo' => 'RESPONSABLE', 'nombre_rol' => 'AUTORIZADO', 'id' => 0];
 
-    // 3. Firma en Base64
+    // 3. Firma física en Base64
     $firmaUsuario = ""; 
     if($ownerRow && file_exists("img/firmas/usuario_{$ownerRow['id']}.png")) {
         $firmaUsuario = 'data:image/png;base64,' . base64_encode(file_get_contents("img/firmas/usuario_{$ownerRow['id']}.png"));
@@ -37,63 +37,53 @@ try {
         $firmaUsuario = 'data:image/png;base64,' . base64_encode(file_get_contents("img/firmas/firma_admin.png"));
     }
 
-    $desde = $_GET['desde'] ?? date('Y-m-d', strtotime('-2 months'));
-    $hasta = $_GET['hasta'] ?? date('Y-m-d');
-    $f_cat = $_GET['categoria_filtro'] ?? '';
-    $f_usu = $_GET['id_usuario'] ?? '';
-    $buscar = trim($_GET['buscar'] ?? '');
+    // --- LÓGICA DE FILTROS ---
+    $cond = [];
+    $titulo_reporte = "LISTADO GENERAL DE CLIENTES";
+    $buscar = $_GET['buscar'] ?? '';
 
-    $condG = ["DATE(g.fecha) >= ?", "DATE(g.fecha) <= ?"];
-    $paramsG = [$desde, $hasta];
-    if($f_cat !== '' && $f_cat !== 'Mermas') { $condG[] = "g.categoria = ?"; $paramsG[] = $f_cat; }
-    if($f_usu !== '') { $condG[] = "g.id_usuario = ?"; $paramsG[] = $f_usu; }
-    if(!empty($buscar)) { $condG[] = "(g.descripcion LIKE ? OR g.id = ?)"; array_push($paramsG, "%$buscar%", intval($buscar)); }
-
-    $condM = ["DATE(m.fecha) >= ?", "DATE(m.fecha) <= ?", "m.motivo NOT LIKE 'Devolución #%'"];
-    $paramsM = [$desde, $hasta];
-    if($f_usu !== '') { $condM[] = "m.id_usuario = ?"; $paramsM[] = $f_usu; }
-    if($f_cat !== '' && $f_cat !== 'Mermas') { $condM[] = "1=0"; } 
-    if(!empty($buscar)) { $condM[] = "(m.motivo LIKE ? OR m.id = ?)"; array_push($paramsM, "%$buscar%", intval($buscar)); }
-
-    // Consulta unificada de Egresos
-    $sql = "(SELECT g.id, g.monto, g.categoria, g.fecha, g.descripcion, u.usuario, 'gasto' as tipo
-             FROM gastos g JOIN usuarios u ON g.id_usuario = u.id 
-             WHERE " . implode(" AND ", $condG) . ")
-            UNION 
-            (SELECT m.id, (m.cantidad * p.precio_costo) as monto, 'Mermas' as categoria, m.fecha, m.motivo as descripcion, u.usuario, 'merma' as tipo
-             FROM mermas m 
-             JOIN usuarios u ON m.id_usuario = u.id 
-             JOIN productos p ON m.id_producto = p.id
-             WHERE " . implode(" AND ", $condM) . ")
-            ORDER BY fecha DESC";
-
-    $stmt = $conexion->prepare($sql);
-    $stmt->execute(array_merge($paramsG, $paramsM));
-    $registros = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    $rango_texto = ($desde == $hasta) ? date('d/m/Y', strtotime($desde)) : date('d/m/Y', strtotime($desde)) . " al " . date('d/m/Y', strtotime($hasta));
-    
-    // --- CÁLCULOS DE RESUMEN EJECUTIVO Y GRÁFICOS ---
-    $totalEgresos = 0;
-    $gastos_categoria = [];
-    $gastos_operador = [];
-
-    foreach($registros as $r) {
-        $monto = floatval($r['monto']);
-        $totalEgresos += $monto;
-
-        // Para gráfico circular (Categorías)
-        $cat = strtoupper($r['categoria']);
-        if(!isset($gastos_categoria[$cat])) { $gastos_categoria[$cat] = 0; }
-        $gastos_categoria[$cat] += $monto;
-
-        // Para gráfico de barras (Operadores)
-        $usu = strtoupper($r['usuario']);
-        if(!isset($gastos_operador[$usu])) { $gastos_operador[$usu] = 0; }
-        $gastos_operador[$usu] += $monto;
+    if (!empty($buscar)) {
+        $cond[] = "(c.nombre LIKE '%$buscar%' OR c.dni LIKE '%$buscar%')";
+        $titulo_reporte = "RESULTADOS DE BÚSQUEDA";
     }
-    arsort($gastos_categoria);
-    arsort($gastos_operador);
+
+    if (isset($_GET['filtro']) && $_GET['filtro'] == 'cumple') {
+        $cond[] = "MONTH(c.fecha_nacimiento) = MONTH(CURDATE()) AND DAY(c.fecha_nacimiento) = DAY(CURDATE())";
+        $titulo_reporte = "REPORTE DE CUMPLEAÑOS DEL DÍA";
+    }
+    if (isset($_GET['estado'])) {
+        if ($_GET['estado'] == 'deuda') {
+            $cond[] = "(SELECT COALESCE(SUM(monto),0) FROM movimientos_cc WHERE id_cliente = c.id AND tipo = 'debe') - (SELECT COALESCE(SUM(monto),0) FROM movimientos_cc WHERE id_cliente = c.id AND tipo = 'haber') > 0.1";
+            $titulo_reporte = "REPORTE DE CLIENTES DEUDORES";
+        }
+    }
+    
+    $where_clause = (count($cond) > 0) ? " WHERE " . implode(" AND ", $cond) : "";
+    $sql = "SELECT c.*, 
+            (SELECT COALESCE(SUM(monto),0) FROM movimientos_cc WHERE id_cliente = c.id AND tipo = 'debe') - 
+            (SELECT COALESCE(SUM(monto),0) FROM movimientos_cc WHERE id_cliente = c.id AND tipo = 'haber') as saldo_calculado
+            FROM clientes c $where_clause ORDER BY c.nombre ASC";
+
+    $clientes = $conexion->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+
+    // --- CÁLCULOS ESTADÍSTICOS PARA EL RESUMEN ---
+    $total_clientes = count($clientes);
+    $total_deuda = 0;
+    $clientes_al_dia = 0;
+    $clientes_deudores = 0;
+    $top_deudores = [];
+
+    foreach($clientes as $c) {
+        $saldo = floatval($c['saldo_calculado']);
+        if($saldo > 0.1) {
+            $total_deuda += $saldo;
+            $clientes_deudores++;
+            $top_deudores[strtoupper($c['nombre'])] = $saldo;
+        } else {
+            $clientes_al_dia++;
+        }
+    }
+    arsort($top_deudores); // Ordenamos a los que más deben
 
     $url_actual = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[REQUEST_URI]";
     if (strpos($url_actual, 'publico=1') === false) {
@@ -110,7 +100,7 @@ try {
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Reporte Gastos - Vanguard Pro</title>
+    <title>Reporte Clientes - Vanguard Pro</title>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
     
@@ -171,65 +161,61 @@ try {
                                 <p style="font-size: 9pt; margin: 0;"><strong>CUIT: <?php echo $negocio['cuit']; ?></strong></p>
                             </div>
                             <div style="text-align: right; width: 30%; font-size: 8pt; color: #333; font-weight: normal;">
-                                <strong>REPORTE DE EGRESOS</strong><br><?php echo $rango_texto; ?><br>
+                                <strong>REPORTE DE CLIENTES</strong><br>
                                 <strong style="color:#102A57;">EMISIÓN: <?php echo date('d/m/Y H:i'); ?></strong>
                             </div>
                         </header>
                         <h3 style="color: #102A57; border-left: 5px solid #102A57; padding-left: 10px; margin-bottom: 20px; margin-top:0; text-transform: uppercase; font-size: 11pt;">
-                            Detalle de Gastos y Mermas
+                            <?php echo $titulo_reporte; ?>
                         </h3>
                     </td>
                 </tr>
                 <tr>
-                    <th style="width: 15%;">FECHA</th>
-                    <th style="width: 45%;">CONCEPTO / OPERADOR</th>
-                    <th style="width: 20%;">CATEGORÍA</th>
-                    <th style="width: 20%; text-align: right;">MONTO</th>
+                    <th style="width: 35%;">CLIENTE / TELÉFONO</th>
+                    <th style="width: 30%;">DNI / USUARIO</th>
+                    <th style="width: 15%; text-align: center;">PUNTOS</th>
+                    <th style="width: 20%; text-align: right;">SALDO DEUDOR</th>
                 </tr>
             </thead>
             
             <tbody>
-                <?php if(count($registros) > 0): ?>
-                    <?php foreach($registros as $r): ?>
+                <?php if(count($clientes) > 0): ?>
+                    <?php foreach($clientes as $c): ?>
                     <tr class="evitar-corte">
-                        <td><?php echo date('d/m/y H:i', strtotime($r['fecha'])); ?></td>
-                        <td><strong><?php echo strtoupper($r['descripcion']); ?></strong><br><small style="color:#666;">Operador: <?php echo strtoupper($r['usuario']); ?></small></td>
-                        <td>
-                            <?php if($r['categoria'] == 'Mermas'): ?>
-                                <span style="background: #f8d7da; color:#dc3545; padding: 2px 6px; border-radius: 4px; font-size: 8pt; font-weight: bold;">MERMA</span>
-                            <?php else: ?>
-                                <span style="background: #eee; padding: 2px 6px; border-radius: 4px; font-size: 8pt; font-weight: bold;"><?php echo strtoupper($r['categoria']); ?></span>
-                            <?php endif; ?>
+                        <td><strong><?php echo strtoupper($c['nombre']); ?></strong><br><small style="color:#666;"><?php echo $c['telefono'] ?: 'S/D'; ?></small></td>
+                        <td><?php echo $c['dni'] ?: 'S/D'; ?><br><small style="color:#102A57; font-weight:bold;">@<?php echo $c['usuario'] ?: 'invitado'; ?></small></td>
+                        <td style="text-align: center; font-weight:bold;"><?php echo number_format($c['puntos_acumulados'], 0); ?></td>
+                        <td style="text-align: right; font-weight: bold; color: <?php echo $c['saldo_calculado'] > 0.1 ? '#dc3545' : '#198754'; ?>;">
+                            $<?php echo number_format($c['saldo_calculado'], 2, ',', '.'); ?>
                         </td>
-                        <td style="text-align: right; font-weight: bold; color:#dc3545;">-$<?php echo number_format($r['monto'], 2, ',', '.'); ?></td>
                     </tr>
                     <?php endforeach; ?>
                     
                     <tr class="evitar-corte">
                         <td colspan="4" style="text-align: center; padding: 40px 20px; color: #a0a0a0; border-top: 2px dashed #e0e0e0;">
-                            <i class="bi bi-wallet2" style="font-size: 28pt; display: block; margin-bottom: 10px; color: #d0d0d0;"></i>
-                            <span style="font-size: 10pt; font-weight: bold; text-transform: uppercase; letter-spacing: 2px;">Fin de Registros de Egresos</span>
+                            <i class="bi bi-people" style="font-size: 28pt; display: block; margin-bottom: 10px; color: #d0d0d0;"></i>
+                            <span style="font-size: 10pt; font-weight: bold; text-transform: uppercase; letter-spacing: 2px;">Fin de Registros de Clientes</span>
                         </td>
                     </tr>
                 <?php else: ?>
-                    <tr><td colspan="4" style="text-align:center; padding: 30px; color:#666;">No hubo egresos en este periodo.</td></tr>
+                    <tr><td colspan="4" style="text-align:center; padding: 30px; color:#666;">No se encontraron clientes con los filtros aplicados.</td></tr>
                 <?php endif; ?>
             </tbody>
         </table>
 
-        <?php if(count($registros) > 0): ?>
+        <?php if(count($clientes) > 0): ?>
         <div class="evitar-corte" style="margin-top: 30px;">
             <div class="resumen-card">
-                <h4 style="color: #102A57; border-bottom: 2px solid #102A57; padding-bottom: 5px; margin-bottom: 15px; margin-top:0; text-transform: uppercase; font-size: 11pt;">Resumen Ejecutivo de Egresos</h4>
+                <h4 style="color: #102A57; border-bottom: 2px solid #102A57; padding-bottom: 5px; margin-bottom: 15px; margin-top:0; text-transform: uppercase; font-size: 11pt;">Resumen de Cartera</h4>
                 
                 <div style="display: flex; gap: 20px; margin-bottom: 20px;">
                     <div style="flex: 1; background: white; padding: 10px; border-radius: 5px; border: 1px solid #ddd; text-align: center;">
-                        <small style="color: #666; font-weight: bold; text-transform: uppercase; font-size: 7pt;">Movimientos Totales</small>
-                        <div style="font-size: 16pt; font-weight: 900; color: #102A57;"><?php echo count($registros); ?></div>
+                        <small style="color: #666; font-weight: bold; text-transform: uppercase; font-size: 7pt;">Clientes Listados</small>
+                        <div style="font-size: 16pt; font-weight: 900; color: #102A57;"><?php echo $total_clientes; ?></div>
                     </div>
-                    <div style="flex: 1; background: #fdf2f2; padding: 10px; border-radius: 5px; border: 1px solid #dc3545; text-align: center;">
-                        <small style="color: #dc3545; font-weight: bold; text-transform: uppercase; font-size: 7pt;">Egreso Bruto Consolidado</small>
-                        <div style="font-size: 16pt; font-weight: 900; color: #dc3545;">-$<?php echo number_format($totalEgresos, 2, ',', '.'); ?></div>
+                    <div style="flex: 1; background: #f8d7da; padding: 10px; border-radius: 5px; border: 1px solid #dc3545; text-align: center;">
+                        <small style="color: #dc3545; font-weight: bold; text-transform: uppercase; font-size: 7pt;">Total Deuda Pendiente</small>
+                        <div style="font-size: 16pt; font-weight: 900; color: #dc3545;">$<?php echo number_format($total_deuda, 2, ',', '.'); ?></div>
                     </div>
                 </div>
 
@@ -237,24 +223,25 @@ try {
                 
                 <div style="display: flex; justify-content: space-between; gap: 15px; width: 100%; box-sizing: border-box;">
                     <div style="flex: 1; background: white; padding: 15px; border-radius: 5px; border: 1px solid #ddd; box-sizing: border-box;">
-                        <strong style="font-size: 8pt; color: #666; text-transform: uppercase; display:block; text-align:center; margin-bottom:10px;">Egresos por Operador ($)</strong>
-                        <div style="position: relative; height: 220px; width: 100%;"><canvas id="chartOperador"></canvas></div>
+                        <strong style="font-size: 8pt; color: #666; text-transform: uppercase; display:block; text-align:center; margin-bottom:10px;">Top Deudores ($)</strong>
+                        <div style="position: relative; height: 220px; width: 100%;"><canvas id="chartDeudores"></canvas></div>
                     </div>
                     <div style="flex: 1; background: white; padding: 15px; border-radius: 5px; border: 1px solid #ddd; box-sizing: border-box;">
-                        <strong style="font-size: 8pt; color: #666; text-transform: uppercase; display:block; text-align:center; margin-bottom:10px;">Distribución de Gastos</strong>
-                        <div style="position: relative; height: 220px; width: 100%;"><canvas id="chartCategoria"></canvas></div>
+                        <strong style="font-size: 8pt; color: #666; text-transform: uppercase; display:block; text-align:center; margin-bottom:10px;">Estado de Cartera</strong>
+                        <div style="position: relative; height: 220px; width: 100%;"><canvas id="chartEstado"></canvas></div>
                     </div>
                 </div>
             </div>
             
             <script> 
-                const datosOperador = <?php echo json_encode($gastos_operador); ?>; 
-                const datosCategoria = <?php echo json_encode($gastos_categoria); ?>; 
+                const datosDeudores = <?php echo json_encode($top_deudores); ?>; 
+                const totalAlDia = <?php echo $clientes_al_dia; ?>;
+                const totalConDeuda = <?php echo $clientes_deudores; ?>;
             </script>
 
             <div class="footer-section">
                 <div style="width: 40%; font-size: 8pt; color: #666; line-height: 1.4; text-align: justify;">
-                    <p><strong>DECLARACIÓN JURADA:</strong> Este reporte refleja fielmente las salidas de dinero (gastos) y el costo asociado a las mermas de inventario registradas en el sistema.</p>
+                    <p><strong>DOCUMENTO CONFIDENCIAL:</strong> Este reporte contiene información sensible y patrimonial de la cartera de clientes de <?php echo $negocio['nombre']; ?>. Su divulgación no autorizada está estrictamente prohibida.</p>
                 </div>
                 <div style="width: 30%; text-align: center;">
                     <img src="<?php echo $qr_url; ?>" style="width: 75px; height: 75px; border: 1px solid #ccc; padding: 2px;">
@@ -278,21 +265,21 @@ try {
 
     <script>
     document.addEventListener("DOMContentLoaded", function() {
-        // Gráfico de Barras: Operadores
-        if(typeof datosOperador !== 'undefined' && Object.keys(datosOperador).length > 0) {
-            const allLabelsOp = Object.keys(datosOperador);
-            const labelsOp = allLabelsOp.slice(0, 6).map(l => l.length > 13 ? l.substring(0, 13) + '...' : l);
-            const dataOp = allLabelsOp.slice(0, 6).map(l => datosOperador[l]);
+        // Gráfico de Barras: Top Deudores
+        if(typeof datosDeudores !== 'undefined' && Object.keys(datosDeudores).length > 0) {
+            const allLabelsDeudores = Object.keys(datosDeudores);
+            const labelsDeudores = allLabelsDeudores.slice(0, 6).map(l => l.length > 13 ? l.substring(0, 13) + '...' : l);
+            const dataDeudores = allLabelsDeudores.slice(0, 6).map(l => datosDeudores[l]);
 
-            if(document.getElementById('chartOperador')) {
-                new Chart(document.getElementById('chartOperador'), {
+            if(document.getElementById('chartDeudores')) {
+                new Chart(document.getElementById('chartDeudores'), {
                     type: 'bar',
                     data: { 
-                        labels: labelsOp, 
+                        labels: labelsDeudores, 
                         datasets: [{ 
-                            label: 'Egresos ($)', 
-                            data: dataOp, 
-                            backgroundColor: '#dc3545', 
+                            label: 'Deuda ($)', 
+                            data: dataDeudores, 
+                            backgroundColor: '#dc3545', // Rojo alerta
                             borderRadius: 4,
                             maxBarThickness: 35 
                         }] 
@@ -310,20 +297,19 @@ try {
             }
         }
 
-        // Gráfico Circular: Categorías
-        if(typeof datosCategoria !== 'undefined' && Object.keys(datosCategoria).length > 0) {
-            const allLabelsCat = Object.keys(datosCategoria);
-            const labelsCat = allLabelsCat.slice(0, 6).map(l => l.length > 15 ? l.substring(0, 15) + '...' : l);
-            const dataCat = allLabelsCat.slice(0, 6).map(l => datosCategoria[l]);
-            
-            const coloresCat = ['#102A57', '#fd7e14', '#198754', '#ffc107', '#0dcaf0', '#6c757d'];
-
-            if(document.getElementById('chartCategoria')) {
-                new Chart(document.getElementById('chartCategoria'), {
+        // Gráfico Circular: Estado de Cartera
+        if(typeof totalAlDia !== 'undefined') {
+            const ctxEstado = document.getElementById('chartEstado');
+            if(ctxEstado && (totalAlDia > 0 || totalConDeuda > 0)) {
+                new Chart(ctxEstado, {
                     type: 'doughnut',
                     data: { 
-                        labels: labelsCat, 
-                        datasets: [{ data: dataCat, backgroundColor: coloresCat, borderWidth: 1 }] 
+                        labels: ['Al Día', 'Con Deuda'], 
+                        datasets: [{ 
+                            data: [totalAlDia, totalConDeuda], 
+                            backgroundColor: ['#198754', '#dc3545'], 
+                            borderWidth: 1 
+                        }] 
                     },
                     options: { 
                         layout: { padding: { bottom: 10 } },
@@ -339,7 +325,7 @@ try {
     // MÁRGENES DE TITANIO VANGUARD PRO
     const optGlobal = { 
         margin: [15, 10, 25, 10], 
-        filename: 'Reporte_Gastos_Corporativo.pdf', 
+        filename: 'Reporte_Clientes_Corporativo.pdf', 
         image: { type: 'jpeg', quality: 0.98 }, 
         html2canvas: { scale: 2, useCORS: true, scrollY: 0 }, 
         pagebreak: { mode: 'css', avoid: ['.evitar-corte'] }, 
@@ -357,18 +343,25 @@ try {
         const totalPages = pdf.internal.getNumberOfPages();
         for (let i = 1; i <= totalPages; i++) {
             pdf.setPage(i);
-            pdf.setDrawColor(200, 200, 200); pdf.setLineWidth(0.5); pdf.line(10, 280, 200, 280);
-            pdf.setFontSize(7.5); pdf.setTextColor(100, 100, 100);
+            
+            pdf.setDrawColor(200, 200, 200); 
+            pdf.setLineWidth(0.5); 
+            pdf.line(10, 280, 200, 280);
+            
+            pdf.setFontSize(7.5); 
+            pdf.setTextColor(100, 100, 100);
             
             const textoEmpresa = '<?php echo addslashes(strtoupper($negocio['nombre'])); ?>';
             const textoGenerador = '<?php echo addslashes($usuario_actual); ?>';
             
-            pdf.text('Reporte de Gastos - ' + textoEmpresa, 10, 284);
+            pdf.text('Reporte de Clientes - ' + textoEmpresa, 10, 284);
             pdf.text('Página ' + i + ' de ' + totalPages, 200, 284, { align: 'right' });
+            
             pdf.text('Emisión: <?php echo date('d/m/Y H:i'); ?> | Solicitado por: ' + textoGenerador, 10, 288);
 
             if (i < totalPages) {
-                pdf.setFont('helvetica', 'italic'); pdf.setTextColor(150, 150, 150);
+                pdf.setFont('helvetica', 'italic'); 
+                pdf.setTextColor(150, 150, 150);
                 pdf.text('Continúa en la página siguiente...', 105, 278, { align: 'center' });
             }
         }
@@ -388,7 +381,7 @@ try {
             cancelButtonText: 'Cerrar'
         }).then((result) => {
             if (result.isConfirmed) {
-                const msj = `📉 *REPORTE DE EGRESOS Y MERMAS*\n🏢 <?php echo $negocio['nombre']; ?>\n📅 Período: <?php echo $rango_texto; ?>\n📄 Ver online: ${window.location.href}`;
+                const msj = `👥 *REPORTE DE CLIENTES*\n🏢 <?php echo $negocio['nombre']; ?>\n📄 Ver online: ${window.location.href}`;
                 window.open(`https://wa.me/?text=${encodeURIComponent(msj)}`, '_blank');
             } else if (result.isDenied) {
                 enviarPorEmailReal();
@@ -406,7 +399,7 @@ try {
                     aplicarFormatoPaginas(pdf); return pdf.output('blob');
                 }).then(blob => {
                     let fData = new FormData();
-                    fData.append('email', email); fData.append('pdf_file', blob, 'Reporte_Gastos.pdf');
+                    fData.append('email', email); fData.append('pdf_file', blob, 'Reporte_Clientes.pdf');
                     return fetch('acciones/enviar_email_reporte_general.php', { method: 'POST', body: fData })
                     .then(r => { if(!r.ok) throw new Error(r.statusText); return r.json(); })
                     .catch(e => Swal.showValidationMessage(`Error: ${e}`));

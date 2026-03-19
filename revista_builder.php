@@ -1,8 +1,17 @@
 <?php
-// revista_builder.php - VERSIÓN FINAL CORREGIDA: IMPRESIÓN LIMPIA (SIN ENCABEZADOS DE NAVEGADOR)
+// revista_builder.php - VERSIÓN CON CANDADOS
 session_start();
 require_once 'includes/db.php';
 if (!isset($_SESSION['usuario_id'])) { header("Location: index.php"); exit; }
+
+// --- CANDADOS DE SEGURIDAD ---
+$permisos = $_SESSION['permisos'] ?? [];
+$es_admin = (($_SESSION['rol'] ?? 3) <= 2);
+
+// Candado: Acceso a la página
+if (!$es_admin && !in_array('revista_builder', $permisos)) { 
+    header("Location: dashboard.php"); exit; 
+}
 
 // 1. PRODUCTOS
 $sql = "SELECT * FROM productos WHERE activo = 1 ORDER BY descripcion ASC";
