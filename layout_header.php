@@ -134,6 +134,7 @@ $es_admin = ($rol_usuario <= 2);
                     <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown">CAJA</a>
                     <ul class="dropdown-menu shadow-sm">
                         <li><a class="dropdown-item" href="ventas.php"><i class="bi bi-cart4 text-success"></i> Nueva Venta</a></li>
+                        <li><a class="dropdown-item" href="admin_pedidos_whatsapp.php"><i class="bi bi-whatsapp text-success"></i> Pedidos WhatsApp</a></li>
                         <li><a class="dropdown-item" href="cierre_caja.php"><i class="bi bi-calculator"></i> Cerrar Caja</a></li>
                         
                         <?php if($es_admin || in_array('ver_historial_cajas', $permisos)): ?>

@@ -47,7 +47,53 @@ elseif($tipo_filtro == 'ofertas') { $sql .= " AND p.precio_oferta > 0"; }
 $sql .= " ORDER BY p.es_destacado_web DESC, p.descripcion ASC";
 $stmt = $conexion->prepare($sql);
 $stmt->execute($params);
-$productos = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$productos_raw = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// --- CÁLCULO DE STOCK REAL (INGREDIENTES) Y FILTRADO OCULTO ---
+$productos = [];
+$hoy_fecha = date('Y-m-d');
+foreach ($productos_raw as $p) {
+    $stock_real = floatval($p['stock_actual']);
+    
+    if ($p['tipo'] === 'combo') {
+        // Si no es ilimitado y ya pasó la fecha de fin, lo ocultamos
+        if (empty($p['es_ilimitado']) && !empty($p['fecha_fin']) && $hoy_fecha > $p['fecha_fin']) {
+            continue; 
+        }
+        
+        $stmtC = $conexion->prepare("SELECT id FROM combos WHERE codigo_barras = ?");
+        $stmtC->execute([$p['codigo_barras']]);
+        $combo_id = $stmtC->fetchColumn();
+        
+        if ($combo_id) {
+            // Leer receta del combo y stock de cada ingrediente
+            $stmtI = $conexion->prepare("SELECT ci.cantidad, prod.stock_actual FROM combo_items ci JOIN productos prod ON ci.id_producto = prod.id WHERE ci.id_combo = ?");
+            $stmtI->execute([$combo_id]);
+            $items = $stmtI->fetchAll(PDO::FETCH_ASSOC);
+            
+            $max_combos = 999999; 
+            $has_items = false;
+            foreach ($items as $item) {
+                $has_items = true;
+                $req = floatval($item['cantidad']); // Lo que pide la receta
+                $disp = floatval($item['stock_actual']); // Lo que hay en góndola
+                if ($req > 0) {
+                    $posibles = floor($disp / $req);
+                    if ($posibles < $max_combos) $max_combos = $posibles;
+                }
+            }
+            $stock_real = $has_items ? $max_combos : 0;
+        } else {
+            $stock_real = 0;
+        }
+    }
+    
+    // Solo mostramos en tienda si se puede armar al menos 1
+    if ($stock_real > 0) {
+        $p['stock_real_calculado'] = $stock_real;
+        $productos[] = $p;
+    }
+}
 
 // --- DISEÑO (CORREGIDO: TOMA EL COLOR DE LA BASE DE DATOS) ---
 $color_db = $conf['color_principal'] ?? '#102A57'; // Color por defecto si no hay nada
@@ -221,9 +267,9 @@ $deg_dir = '135deg';
                                     <?php endif; ?>
                                 </div>
                                 
-                                <button class="btn-add-circle" onclick="addCart(<?php echo $p['id']; ?>, '<?php echo addslashes($p['descripcion']); ?>', <?php echo $precio_final; ?>, <?php echo $p['stock_actual']; ?>)">
-    <i class="bi bi-plus-lg"></i>
-</button>
+                                <button class="btn-add-circle" onclick="addCart(<?php echo $p['id']; ?>, '<?php echo addslashes($p['descripcion']); ?>', <?php echo $precio_final; ?>, <?php echo $p['stock_real_calculado']; ?>)">
+                                    <i class="bi bi-plus-lg"></i>
+                                </button>
 
                             </div>
                         </div>
@@ -266,11 +312,24 @@ $deg_dir = '135deg';
                         
                         <div class="row g-2">
                             <div class="col-6">
-                                <label class="form-label-sm">Teléfono (Opcional)</label>
-                                <input type="tel" id="cli_tel" class="form-control form-control-sm" placeholder="WhatsApp..." value="<?php echo $cliente_logueado['telefono'] ?? ''; ?>">
+                                <label class="form-label-sm">WhatsApp (Opcional)</label>
+                                <div class="input-group input-group-sm">
+                                    <select id="cli_cod_pais" class="form-select bg-light" style="max-width: 65px; padding: 0 2px 0 5px;">
+                                        <option value="+54" selected>🇦🇷</option>
+                                        <option value="+1">🇺🇸</option>
+                                        <option value="+34">🇪🇸</option>
+                                        <option value="+56">🇨🇱</option>
+                                        <option value="+598">🇺🇾</option>
+                                        <option value="+55">🇧🇷</option>
+                                        <option value="+52">🇲🇽</option>
+                                        <option value="+57">🇨🇴</option>
+                                        <option value="+51">🇵🇪</option>
+                                    </select>
+                                    <input type="tel" id="cli_tel" class="form-control form-control-sm" placeholder="Tu número..." value="<?php echo $cliente_logueado['telefono'] ?? ''; ?>">
+                                </div>
                             </div>
                             <div class="col-6">
-                                <label class="form-label-sm">Email (Opcional)</label>
+                                <label class="form-label-sm text-danger">* Email</label>
                                 <input type="email" id="cli_email" class="form-control form-control-sm" placeholder="@email..." value="<?php echo $cliente_logueado['email'] ?? ''; ?>">
                             </div>
                         </div>
@@ -406,48 +465,50 @@ function openCart() {
 }
 
         
-        // --- FUNCIÓN WHATSAPP MEJORADA ---
-        function sendWA() {
+        async function sendWA() {
             if(cart.length == 0) return Swal.fire('Carrito Vacío', 'Agrega productos antes de enviar.', 'warning');
             
-            // VALIDAR NOMBRE OBLIGATORIO
             let cli_nom = document.getElementById('cli_nombre').value.trim();
-            if(cli_nom === '') {
-                Swal.fire({icon: 'error', title: 'Falta tu Nombre', text: 'Por favor, escribí tu nombre para saber quién sos.'});
-                return;
-            }
-
+            let cod_pais = document.getElementById('cli_cod_pais').value;
             let cli_tel = document.getElementById('cli_tel').value.trim();
             let cli_email = document.getElementById('cli_email').value.trim();
-            let cli_dir = document.getElementById('cli_dir').value.trim();
             
-            // CONSTRUIR MENSAJE ATRACTIVO
-            let msg = `Hola *<?php echo $nombre_negocio; ?>*! 👋%0A`;
-            msg += `Quiero realizar el siguiente pedido:%0A%0A`;
-            
-            let tot = 0;
-            cart.forEach(i => { 
-                let sub = i.precio * i.cant;
-                tot += sub;
-                // Emojis y negritas para cada ítem
-                msg += `🔹 *${i.cant}x* ${i.nombre} ($${sub})%0A`; 
-            });
-            
-            msg += `%0A💰 *TOTAL: $${tot}*%0A`;
-            msg += `--------------------------------%0A`;
-            msg += `👤 *Cliente:* ${cli_nom}%0A`;
-            
-            if(cli_tel) msg += `📱 *Tel:* ${cli_tel}%0A`;
-            if(cli_email) msg += `📧 *Email:* ${cli_email}%0A`;
-            if(cli_dir) msg += `📍 *Dirección:* ${cli_dir}%0A`;
-            
-            msg += `--------------------------------%0A`;
-            msg += `Espero confirmación. ¡Gracias!`;
+            if(cli_nom === '' || cli_email === '') {
+                return Swal.fire({icon: 'warning', title: 'Datos Faltantes', text: 'El nombre y correo electrónico son obligatorios.'});
+            }
 
-            // NÚMERO DINÁMICO DESDE BASE DE DATOS
-            let telefonoDestino = "<?php echo $telefono_wa; ?>";
-            
-            window.open(`https://wa.me/${telefonoDestino}?text=${msg}`, '_blank');
+            let tel_completo = cli_tel !== '' ? cod_pais + cli_tel.replace(/[^0-9]/g, '') : '';
+            let tot = cart.reduce((acc, i) => acc + (i.precio * i.cant), 0);
+
+            Swal.fire({ title: 'Generando pedido...', text: 'Aguardá un momento', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); } });
+
+            try {
+                let res = await fetch('ajax_guardar_pedido_wa.php', {
+                    method: 'POST',
+                    body: JSON.stringify({ nombre: cli_nom, telefono: tel_completo, email: cli_email, total: tot, carrito: cart }),
+                    headers:{'Content-Type': 'application/json'}
+                });
+                
+                let data = await res.json();
+                
+                if(data.exito) {
+                    cart = []; save(); updBadge();
+                    Swal.fire({
+                        icon: 'success', 
+                        title: '¡Pedido Recibido!', 
+                        text: 'Tu ID es #' + data.id_pedido + '. Serás notificado al correo electrónico: ' + cli_email,
+                        confirmButtonText: 'Aceptar', 
+                        confirmButtonColor: '#102A57'
+                    }).then(() => {
+                        location.reload();
+                    });
+                } else {
+                    Swal.fire('Error', data.error || 'Hubo un problema al procesar.', 'error');
+                }
+            } catch(e) {
+                Swal.fire('Error', 'No se pudo conectar con el servidor. Se produjo un fallo interno.', 'error');
+                console.error(e);
+            }
         }
 
         document.addEventListener('DOMContentLoaded', () => { initCart(); });

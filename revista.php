@@ -1,8 +1,17 @@
 <?php
 // revista.php - VERSIÓN FINAL (FIX BOTÓN CELULAR + FOTOS CHICAS)
+session_start();
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
 require_once 'includes/db.php';
+
+// --- DATA USUARIO LOGUEADO (VINCULACIÓN CON TIENDA) ---
+$cliente_logueado = null;
+if(isset($_SESSION['cliente_id'])) {
+    $stmtCli = $conexion->prepare("SELECT * FROM clientes WHERE id = ?");
+    $stmtCli->execute([$_SESSION['cliente_id']]);
+    $cliente_logueado = $stmtCli->fetch(PDO::FETCH_ASSOC);
+}
 
 // 1. DATA
 $conf_sis = $conexion->query("SELECT * FROM configuracion WHERE id=1")->fetch(PDO::FETCH_ASSOC);
@@ -31,16 +40,54 @@ $sql_prod = "SELECT p.*, c.nombre as categoria, cb.fecha_inicio, cb.fecha_fin, c
         FROM productos p 
         JOIN categorias c ON p.id_categoria = c.id 
         LEFT JOIN combos cb ON p.codigo_barras = cb.codigo_barras 
-        WHERE p.activo = 1 AND (p.tipo_negocio = '$rubro_actual' OR p.tipo_negocio IS NULL)";
+        WHERE p.activo = 1 AND (p.tipo_negocio = '$rubro_actual' OR p.tipo_negocio IS NULL) AND (p.stock_actual > 0 OR p.tipo = 'combo')";
 
 $stmt_prod = $conexion->query($sql_prod);
 $raw_productos = $stmt_prod ? $stmt_prod->fetchAll(PDO::FETCH_ASSOC) : [];
 
 $productos_por_cat = [];
+$hoy_fecha = date('Y-m-d');
+
 foreach ($raw_productos as $p) {
-    // Si el producto es tipo combo, lo mandamos a una categoría especial "🎁 OFERTAS"
-    $cat_final = ($p['tipo'] == 'combo') ? '🎁 OFERTAS' : $p['categoria'];
-    $productos_por_cat[$cat_final][] = $p;
+    $stock_real = floatval($p['stock_actual']);
+    
+    if ($p['tipo'] === 'combo') {
+        if (empty($p['es_ilimitado']) && !empty($p['fecha_fin']) && $hoy_fecha > $p['fecha_fin']) {
+            continue; 
+        }
+        
+        $stmtC = $conexion->prepare("SELECT id FROM combos WHERE codigo_barras = ?");
+        $stmtC->execute([$p['codigo_barras']]);
+        $combo_id = $stmtC->fetchColumn();
+        
+        if ($combo_id) {
+            $stmtI = $conexion->prepare("SELECT ci.cantidad, prod.stock_actual FROM combo_items ci JOIN productos prod ON ci.id_producto = prod.id WHERE ci.id_combo = ?");
+            $stmtI->execute([$combo_id]);
+            $items = $stmtI->fetchAll(PDO::FETCH_ASSOC);
+            
+            $max_combos = 999999; 
+            $has_items = false;
+            foreach ($items as $item) {
+                $has_items = true;
+                $req = floatval($item['cantidad']); 
+                $disp = floatval($item['stock_actual']); 
+                if ($req > 0) {
+                    $posibles = floor($disp / $req);
+                    if ($posibles < $max_combos) $max_combos = $posibles;
+                }
+            }
+            $stock_real = $has_items ? $max_combos : 0;
+        } else {
+            $stock_real = 0;
+        }
+    }
+    
+    if ($stock_real > 0) {
+        $p['stock_real_calculado'] = $stock_real;
+        // Si el producto es tipo combo, lo mandamos a una categoría especial "🎁 OFERTAS"
+        $cat_final = ($p['tipo'] == 'combo') ? '🎁 OFERTAS' : $p['categoria'];
+        $productos_por_cat[$cat_final][] = $p;
+    }
 }
 
 // Mapa de Navegación Dinámico
@@ -437,7 +484,7 @@ $colores_cat = ['#e60023', '#007bff', '#28a745', '#fd7e14', '#6610f2', '#6f42c1'
         </div>
 
         <button type="button" class="btn-plus" 
-             onclick="event.stopPropagation(); addCart(<?php echo $p['id']; ?>, '<?php echo addslashes($p['descripcion']); ?>', <?php echo $precio_final; ?>, <?php echo $p['stock_actual']; ?>);">
+             onclick="event.stopPropagation(); addCart(<?php echo $p['id']; ?>, '<?php echo addslashes($p['descripcion']); ?>', <?php echo $precio_final; ?>, <?php echo $p['stock_real_calculado']; ?>);">
             <i class="bi bi-plus-lg"></i>
         </button>
         
@@ -537,22 +584,35 @@ $colores_cat = ['#e60023', '#007bff', '#28a745', '#fd7e14', '#6610f2', '#6f42c1'
                         
                         <div class="mb-2">
                             <label class="form-label small fw-bold text-danger mb-0">* Nombre</label>
-                            <input type="text" id="cli_nombre" class="form-control form-control-sm" placeholder="Tu nombre...">
+                            <input type="text" id="cli_nombre" class="form-control form-control-sm" placeholder="Tu nombre..." value="<?php echo htmlspecialchars($cliente_logueado['nombre'] ?? ''); ?>">
                         </div>
                         
                         <div class="row g-2">
                             <div class="col-6">
-                                <label class="form-label small mb-0 text-muted">Teléfono</label>
-                                <input type="tel" id="cli_tel" class="form-control form-control-sm" placeholder="Opcional...">
+                                <label class="form-label small mb-0 text-muted">WhatsApp (Opcional)</label>
+                                <div class="input-group input-group-sm">
+                                    <select id="cli_cod_pais" class="form-select bg-light" style="max-width: 65px; padding: 0 2px 0 5px;">
+                                        <option value="+54" selected>🇦🇷</option>
+                                        <option value="+1">🇺🇸</option>
+                                        <option value="+34">🇪🇸</option>
+                                        <option value="+56">🇨🇱</option>
+                                        <option value="+598">🇺🇾</option>
+                                        <option value="+55">🇧🇷</option>
+                                        <option value="+52">🇲🇽</option>
+                                        <option value="+57">🇨🇴</option>
+                                        <option value="+51">🇵🇪</option>
+                                    </select>
+                                    <input type="tel" id="cli_tel" class="form-control form-control-sm" placeholder="Tu número..." value="<?php echo htmlspecialchars($cliente_logueado['telefono'] ?? ($_SESSION['cliente_telefono'] ?? '')); ?>">
+                                </div>
                             </div>
                             <div class="col-6">
-                                <label class="form-label small mb-0 text-muted">Email</label>
-                                <input type="email" id="cli_email" class="form-control form-control-sm" placeholder="Opcional...">
+                                <label class="form-label small fw-bold text-danger mb-0">* Email</label>
+                                <input type="email" id="cli_email" class="form-control form-control-sm" placeholder="Correo obligatorio..." value="<?php echo htmlspecialchars($cliente_logueado['email'] ?? ''); ?>">
                             </div>
                         </div>
                         <div class="mt-2">
                             <label class="form-label small mb-0 text-muted">Dirección</label>
-                            <input type="text" id="cli_dir" class="form-control form-control-sm" placeholder="Calle, Altura, Localidad...">
+                            <input type="text" id="cli_dir" class="form-control form-control-sm" placeholder="Calle, Altura, Localidad..." value="<?php echo htmlspecialchars($cliente_logueado['direccion'] ?? ''); ?>">
                         </div>
                     </div>
                 </div>
@@ -732,47 +792,50 @@ $colores_cat = ['#e60023', '#007bff', '#28a745', '#fd7e14', '#6610f2', '#6f42c1'
         function save() { localStorage.setItem('carrito_kiosco', JSON.stringify(cart)); }
         function updBadge() { document.getElementById('badgeCount').innerText = cart.reduce((s,i)=>s+i.cant,0); }
         
-        function sendWA() {
+        async function sendWA() {
             if(cart.length == 0) return Swal.fire('Carrito Vacío', 'Agrega productos antes de enviar.', 'warning');
             
-            // 1. VALIDAR NOMBRE (Obligatorio)
             let cli_nom = document.getElementById('cli_nombre').value.trim();
-            if(cli_nom === '') {
-                return Swal.fire({icon: 'warning', title: 'Falta tu nombre', text: 'Por favor escribí tu nombre para saber quién sos.', confirmButtonColor: '#28a745'});
-            }
-
-            // 2. OBTENER DATOS OPCIONALES
+            let cod_pais = document.getElementById('cli_cod_pais').value;
             let cli_tel = document.getElementById('cli_tel').value.trim();
             let cli_email = document.getElementById('cli_email').value.trim();
-            let cli_dir = document.getElementById('cli_dir').value.trim();
             
-            // 3. ARMAR MENSAJE DETALLADO
-            let msg = `Hola *<?php echo $nombre_negocio; ?>*! 👋%0A`;
-            msg += `Quiero realizar el siguiente pedido desde la *Revista Digital*:%0A%0A`;
-            
-            let tot = 0;
-            cart.forEach(i => { 
-                let sub = i.precio * i.cant;
-                tot += sub;
-                // Emojis y negritas para cada ítem
-                msg += `🔹 *${i.cant}x* ${i.nombre} ($${sub})%0A`; 
-            });
-            
-            msg += `%0A💰 *TOTAL: $${tot}*%0A`;
-            msg += `--------------------------------%0A`;
-            msg += `👤 *Cliente:* ${cli_nom}%0A`;
-            
-            if(cli_tel) msg += `📱 *Tel:* ${cli_tel}%0A`;
-            if(cli_email) msg += `📧 *Email:* ${cli_email}%0A`;
-            if(cli_dir) msg += `📍 *Dirección:* ${cli_dir}%0A`;
-            
-            msg += `--------------------------------%0A`;
-            msg += `Espero confirmación. ¡Gracias!`;
+            if(cli_nom === '' || cli_email === '') {
+                return Swal.fire({icon: 'warning', title: 'Datos Faltantes', text: 'El nombre y correo electrónico son obligatorios.'});
+            }
 
-            // 4. USAR EL NÚMERO CONFIGURADO EN EL PASO 1
-            let telefonoDestino = "<?php echo $telefono_wa; ?>";
-            
-            window.open(`https://wa.me/${telefonoDestino}?text=${msg}`, '_blank');
+            let tel_completo = cli_tel !== '' ? cod_pais + cli_tel.replace(/[^0-9]/g, '') : '';
+            let tot = cart.reduce((acc, i) => acc + (i.precio * i.cant), 0);
+
+            Swal.fire({ title: 'Generando pedido...', text: 'Aguardá un momento', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); } });
+
+            try {
+                let res = await fetch('ajax_guardar_pedido_wa.php', {
+                    method: 'POST',
+                    body: JSON.stringify({ nombre: cli_nom, telefono: tel_completo, email: cli_email, total: tot, carrito: cart }),
+                    headers:{'Content-Type': 'application/json'}
+                });
+                
+                let data = await res.json();
+                
+                if(data.exito) {
+                    cart = []; save(); updBadge();
+                    Swal.fire({
+                        icon: 'success', 
+                        title: '¡Pedido Recibido!', 
+                        text: 'Tu ID es #' + data.id_pedido + '. Serás notificado al correo electrónico: ' + cli_email,
+                        confirmButtonText: 'Aceptar', 
+                        confirmButtonColor: '#102A57'
+                    }).then(() => {
+                        location.reload();
+                    });
+                } else {
+                    Swal.fire('Error', data.error || 'Hubo un problema al procesar.', 'error');
+                }
+            } catch(e) {
+                Swal.fire('Error', 'No se pudo conectar con el servidor. Se produjo un fallo interno.', 'error');
+                console.error(e);
+            }
         }
         function share() {
             if(navigator.share) navigator.share({url:window.location.href});

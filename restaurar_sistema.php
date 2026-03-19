@@ -142,9 +142,14 @@ if (is_dir('backups')) {
             <h2 class="font-cancha mb-0 text-primary"><i class="bi bi-clock-history"></i> Máquina del Tiempo</h2>
             <p class="text-muted mb-0">Restaura, sube o elimina copias de seguridad del sistema.</p>
         </div>
-        <a href="reset_sistema.php" class="btn btn-outline-danger fw-bold rounded-pill shadow-sm">
-            <i class="bi bi-trash3"></i> Ir a Resetear
-        </a>
+        <div class="d-flex gap-2">
+            <a href="generar_backup.php" class="btn btn-success fw-bold rounded-pill shadow-sm">
+                <i class="bi bi-database-down"></i> Generar Backup
+            </a>
+            <a href="reset_sistema.php" class="btn btn-outline-danger fw-bold rounded-pill shadow-sm">
+                <i class="bi bi-trash3"></i> Ir a Resetear
+            </a>
+        </div>
     </div>
 
     <?php if($mensaje): ?>
