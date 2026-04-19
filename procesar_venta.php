@@ -1,8 +1,8 @@
 <?php
 // procesar_venta.php - VERSIÓN BLINDADA (Corregido error fatal de fetch object/array)
 // Se desactiva el reporte de errores en pantalla para no romper el JSON con Warnings
-error_reporting(0); 
-ini_set('display_errors', 0);
+error_reporting(E_ALL); 
+ini_set('display_errors', 1);
 
 session_start();
 require_once '../includes/db.php';
@@ -48,7 +48,7 @@ $total = floatval($_POST['total'] ?? 0);
     }
     $id_caja_sesion = $caja['id'];
     $conf = $conexion->query("SELECT dinero_por_punto, redondeo_auto, tipo_negocio FROM configuracion WHERE id=1")->fetch(PDO::FETCH_ASSOC);
-    $redondeo_activo = (isset($conf['redondeo_auto']) && $conf['redondeo_auto'] == 1);
+    $redondeo_activo = (isset($conf['redondeo_auto']) && $conf['redondeo_auto'] == 1 && strtolower($metodo_pago) === 'efectivo');
     $rubro_actual = $conf['tipo_negocio'] ?? 'kiosco';
 
     // ---------------------------------------------------------
@@ -302,6 +302,60 @@ $total = floatval($_POST['total'] ?? 0);
     $detalles_audit = "Venta #$venta_id | Total: $$total | Cliente ID: $id_cliente";
     if($desc_manual_monto > 0) $detalles_audit .= " | Desc.Manual: $$desc_manual_monto";
     $conexion->prepare("INSERT INTO auditoria (fecha, id_usuario, accion, detalles, tipo_negocio) VALUES (?, ?, 'VENTA_REALIZADA', ?, ?)")->execute([$fecha_actual, $user_id, $detalles_audit, $rubro_actual]);
+
+    // --- INICIO CONEXIÓN AFIP ---
+    $conf_gral = $conexion->query("SELECT ticket_modo FROM configuracion WHERE id=1")->fetch(PDO::FETCH_ASSOC);
+    if ($conf_gral['ticket_modo'] === 'afip' && $total > 0) {
+        $afip_db = $conexion->query("SELECT * FROM afip_config WHERE id=1")->fetch(PDO::FETCH_ASSOC);
+        if ($afip_db && !empty($afip_db['cuit'])) {
+            require_once '../Afip.php';
+            
+            try {
+                // Truco para crear las columnas si no existen sin que tengas que tocar la base de datos
+                $conexion->query("ALTER TABLE ventas ADD COLUMN cae VARCHAR(100) NULL, ADD COLUMN cae_vencimiento DATE NULL, ADD COLUMN nro_factura INT NULL");
+            } catch (Exception $e) { /* Si ya existen las columnas, lo ignora y sigue */ }
+
+            $afip = new Afip(array(
+                'CUIT' => (string)$afip_db['cuit'],
+                'production' => ($afip_db['modo'] === 'produccion'),
+                'cert' => __DIR__ . '/../afip/certificado.crt',
+                'key' => __DIR__ . '/../afip/privada.key',
+                'res_folder' => __DIR__ . '/../afip/'
+            ));
+
+            $doc_tipo = 99; // Consumidor Final
+            $doc_nro = 0;
+            if ($id_cliente > 1) {
+                $cli = $conexion->prepare("SELECT dni_cuit FROM clientes WHERE id = ?");
+                $cli->execute([$id_cliente]);
+                $datos_cli = $cli->fetch(PDO::FETCH_ASSOC);
+                if ($datos_cli && strlen($datos_cli['dni_cuit']) == 8) { $doc_tipo = 96; $doc_nro = (string)$datos_cli['dni_cuit']; } 
+                elseif ($datos_cli && strlen($datos_cli['dni_cuit']) == 11) { $doc_tipo = 80; $doc_nro = (string)$datos_cli['dni_cuit']; }
+            }
+
+            try {
+                $last_voucher = $afip->ElectronicBilling->GetLastVoucher($afip_db['punto_venta'], 11);
+                $nro_factura = $last_voucher + 1;
+                $data = array(
+                    'CantReg' 	=> 1, 'PtoVta' 	=> $afip_db['punto_venta'], 'CbteTipo' 	=> 11, 'Concepto' 	=> 1,
+                    'DocTipo' 	=> $doc_tipo, 'DocNro' 	=> $doc_nro, 'CbteDesde' => $nro_factura, 'CbteHasta' => $nro_factura,
+                    'CbteFch' 	=> intval(date('Ymd')), 'ImpTotal' 	=> round($total, 2), 'ImpTotConc'=> 0, 'ImpNeto' 	=> round($total, 2),
+                    'ImpOpEx' 	=> 0, 'ImpIVA' 	=> 0, 'ImpTrib' 	=> 0, 'MonId' 	=> 'PES', 'MonCotiz' 	=> 1
+                );
+                $res = $afip->ElectronicBilling->CreateVoucher($data);
+                
+                $conexion->prepare("UPDATE ventas SET cae = ?, cae_vencimiento = ?, nro_factura = ? WHERE id = ?")
+                         ->execute([$res['CAE'], $res['CAEFchVto'], $nro_factura, $venta_id]);
+            } catch (Exception $e) {
+                $conexion->rollBack();
+                // Logueamos el error real para que sepas qué pasó
+                error_log("Error AFIP Venta #$venta_id: " . $e->getMessage());
+                echo json_encode(['status' => 'error', 'msg' => 'Error de comunicación: ' . $e->getMessage()]);
+                exit;
+            }
+        }
+    }
+    // --- FIN CONEXIÓN AFIP ---
 
     $conexion->commit();
     echo json_encode(['status' => 'success', 'id_venta' => $venta_id, 'msg' => 'Venta procesada correctamente']);

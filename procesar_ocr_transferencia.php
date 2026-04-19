@@ -1,6 +1,7 @@
 <?php
 error_reporting(0);
 ini_set('display_errors', 0);
+header('Content-Type: application/json');
 include_once '../includes/db.php'; 
 
 if (isset($conexion) && !isset($conn)) {
@@ -11,9 +12,10 @@ if (isset($conexion) && !isset($conn)) {
 
 if (isset($_POST['imagenes_base64']) || isset($_POST['imagen_base64'])) {
     $fotos = isset($_POST['imagenes_base64']) ? $_POST['imagenes_base64'] : [$_POST['imagen_base64']];
+    $monto_esperado = isset($_POST['monto_esperado']) ? floatval($_POST['monto_esperado']) : 0;
+    
     $texto_crudo = "";
     
-    // Leemos todas las fotos que haya mandado el cajero
     foreach($fotos as $base64) {
         $ch = curl_init('https://api.ocr.space/parse/image');
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
@@ -38,23 +40,15 @@ if (isset($_POST['imagenes_base64']) || isset($_POST['imagen_base64'])) {
     if (trim($texto_crudo) !== "") {
         // --- 1. SUPER DICCIONARIO DE OCR ---
         $errores_comunes = [
-            // Borramos los botones de las apps para que no los confunda con nombres de personas
             'Dtra transferent' => '', 'Otra transferencia' => '', 'Compartir comprobante' => '', 'Ir al inicio' => '',
             'Hacer otra transferencia' => '', 'Volver al inicio' => '', 'Agendar' => '', 'Finalizar' => '', 'Comprobante de transferencia' => '',
-            
-            // Nombres rotos comunes (El super diccionario de nombres)
-            'Fedento' => 'Federico', 'Federlco' => 'Federico', 'Fedenico' => 'Federico',
-            'Mancelo' => 'Marcelo', 'Gbnzalez' => 'Gonzalez', 'Gomzalez' => 'Gonzalez',
-            'Beatrizcaceres' => 'Beatriz Caceres', 'Jaquellne' => 'Jaqueline',
-            
-            // Palabras clave rotas
             'Numera' => 'Número', 'numera' => 'número', 'operecio' => 'operación', 'operacion' => 'operación',
             'Manios' => 'Varios', 'mertudo' => 'mercado', 'fago' => 'pago', 'mercedo' => 'mercado',
             'Comprabante' => 'Comprobante', 'Ccmprobante' => 'Comprobante', 'Transferencía' => 'transferencia',
+            'referencía' => 'referencia', 'referencla' => 'referencia',
             'CVL:' => 'CVU:', 'CBL:' => 'CBU:', 'CBUU' => 'CBU', 'CVUU' => 'CVU', 
             'GUIL' => 'CUIL', 'CUIU' => 'CUIL', 'CUITÍCUIL' => 'CUIT/CUIL', 'CUlT' => 'CUIT',
             'nro' => 'Número', 'Nro' => 'Número', 'rnonto' => 'monto', 'Manta' => 'Monto',
-            '|' => 'I', '[' => 'C', ']' => 'J', '{' => 'C', '}' => 'J',
             'Banca' => 'Banco', 'Bancc' => 'Banco', 'Ganco' => 'Banco',
             'Galicía' => 'Galicia', 'Gelicia' => 'Galicia', 'Calicia' => 'Galicia',
             'Santan' => 'Santander', 'Sentander' => 'Santander', 'Nacion' => 'Nación', 
@@ -76,16 +70,37 @@ if (isset($_POST['imagenes_base64']) || isset($_POST['imagen_base64'])) {
         $nom_r = 'No detectado';
         $nro_op = 'S/N';
 
-        // Filtramos CBUs y DNIs únicos para que no se dupliquen si scaneas en 2 partes
+        // --- NUEVA LÓGICA INTELIGENTE DE CBU/CVU ---
         preg_match_all('/\b\d{22}\b/', $t, $cbus);
         $cbus_unicos = array_values(array_unique($cbus[0])); 
-        $cbu_e = $cbus_unicos[0] ?? '---';
-        $cbu_r = $cbus_unicos[1] ?? '---';
+        $cbu_e = '---'; $cbu_r = '---';
+        
+        if (count($cbus_unicos) >= 2) {
+            $cbu_e = $cbus_unicos[0];
+            $cbu_r = $cbus_unicos[1];
+        } elseif (count($cbus_unicos) == 1) {
+            $cbu_r = $cbus_unicos[0];
+        }
 
+        if (preg_match('/(?:origen|desde|remitente)[^\d]*(\d{22})/i', $t, $m)) $cbu_e = $m[1];
+        if (preg_match('/(?:destino|para|destinatario|a su cuenta)[^\d]*(\d{22})/i', $t, $m)) $cbu_r = $m[1];
+
+
+        // --- NUEVA LÓGICA INTELIGENTE DE CUIT/DNI ---
         preg_match_all('/\b\d{7,11}\b/', $t, $docs);
         $docs_unicos = array_values(array_unique($docs[0])); 
-        $doc_e = $docs_unicos[0] ?? '---';
-        $doc_r = $docs_unicos[1] ?? '---';
+        $doc_e = '---'; $doc_r = '---';
+        
+        if (count($docs_unicos) >= 2) {
+            $doc_e = $docs_unicos[0];
+            $doc_r = $docs_unicos[1];
+        } elseif (count($docs_unicos) == 1) {
+            $doc_r = $docs_unicos[0];
+        }
+
+        if (preg_match('/(?:origen|desde|remitente)[^\d]*(\d{7,11})/i', $t, $m)) $doc_e = $m[1];
+        if (preg_match('/(?:destino|para|destinatario)[^\d]*(\d{7,11})/i', $t, $m)) $doc_r = $m[1];
+
 
         // --- 3. REGLAS BLINDADAS POR BANCO ---
         if (stripos($t, 'Mercado Pago') !== false || stripos($t, 'MercadoPago') !== false) {
@@ -95,35 +110,22 @@ if (isset($_POST['imagenes_base64']) || isset($_POST['imagen_base64'])) {
             if (preg_match('/Para\s*([A-ZÁÉÍÓÚÑa-z\s]+?)\s*(?:CUIT|CVU|Mercado)/i', $t, $match)) $nom_r = trim($match[1]);
             if (preg_match('/operaci[oó]n.*?\s+(\d{9,})/i', $t, $match)) $nro_op = trim($match[1]);
         } 
-        // Regla BNA (Atrapa tanto el PDF que dice "BNA+" como la pantalla verde que dice "Transferencia exitosa")
         elseif (stripos($t, 'BNA+') !== false || (stripos($t, 'Transferencia exitosa') !== false && stripos($t, 'Cuenta origen') !== false)) {
             $banco_detectado = 'Banco Nación';
             if (preg_match('/Monto\s*\$\s*([\d\.\,]+)/i', $t, $m)) $monto_str_gen = trim($m[1]);
-            
-            if (preg_match('/Destinatario\s*([A-ZÁÉÍÓÚÑa-z\s]+?)\s*CUIT/i', $t, $match)) {
-                $nom_r = trim($match[1]); // Atrapa en PDF
-            } elseif (preg_match('/Para\s*([A-ZÁÉÍÓÚÑa-z\s]+?)\s*(?:Alias|CUIT|Banco)/i', $t, $match)) {
-                $nom_r = trim($match[1]); // Atrapa en Pantalla Verde
-            }
+            if (preg_match('/Destinatario\s*([A-ZÁÉÍÓÚÑa-z\s]+?)\s*CUIT/i', $t, $match)) { $nom_r = trim($match[1]); } elseif (preg_match('/Para\s*([A-ZÁÉÍÓÚÑa-z\s]+?)\s*(?:Alias|CUIT|Banco)/i', $t, $match)) { $nom_r = trim($match[1]); }
             if (preg_match('/transacci[oó]n\s*([A-Z0-9]+)/i', $t, $match)) $nro_op = trim($match[1]);
-            $nom_e = 'Cliente BNA'; // La pantalla no lo muestra
+            $nom_e = 'Cliente BNA'; 
         }
         elseif (stripos($t, 'Supervielle') !== false) {
             $banco_detectado = 'Supervielle';
-            
-            // Lector de centavos chiquitos de Supervielle (Ej: 595.00000 lo convierte a 595000.00)
             if (preg_match('/enviado\s*\$\s*([0-9\.\s]+)/i', $t, $m)) {
                 $m_sup = preg_replace('/[^\d]/', '', $m[1]);
-                if (strlen($m_sup) >= 3) { 
-                    $monto_str_gen = substr($m_sup, 0, -2) . '.' . substr($m_sup, -2);
-                } else {
-                    $monto_str_gen = $m_sup . '.00';
-                }
+                if (strlen($m_sup) >= 3) { $monto_str_gen = substr($m_sup, 0, -2) . '.' . substr($m_sup, -2); } else { $monto_str_gen = $m_sup . '.00'; }
             }
-
             if (preg_match('/origen\s*([A-ZÁÉÍÓÚÑa-z\s]+?)\s*(?:CUIT|Supervielle)/i', $t, $match)) $nom_e = trim($match[1]);
             if (preg_match('/destino\s*([A-ZÁÉÍÓÚÑa-z\s]+?)\s*(?:CBU|CUIT|Naci[oó]n|Banco|Provincia)/i', $t, $match)) $nom_r = trim($match[1]);
-            if (preg_match('/control[^\d]*(\d+)/i', $t, $match)) $nro_op = trim($match[1]); // Atrapa el 0622 aunque esté separado
+            if (preg_match('/control[^\d]*(\d+)/i', $t, $match)) $nro_op = trim($match[1]); 
         }
         elseif (stripos($t, 'Uala') !== false || stripos($t, 'Ualá') !== false) {
             $banco_detectado = 'Ualá';
@@ -142,43 +144,63 @@ if (isset($_POST['imagenes_base64']) || isset($_POST['imagen_base64'])) {
             if (preg_match('/Para\s*([A-ZÁÉÍÓÚÑa-z\,\s]+?)\s*A su cuenta/i', $t, $match)) $nom_r = trim($match[1]);
             if (preg_match('/Ref\.?\s*([a-zA-Z0-9\-]+)/i', $t, $match)) $nro_op = trim($match[1]);
         }
-        elseif (stripos($t, 'Cuenta DNI') !== false || stripos($t, 'Provincia') !== false) {
-            $banco_detectado = 'Cuenta DNI';
-            if (preg_match('/Destinatario\s*([A-ZÁÉÍÓÚÑa-z\s]+?)\s*(?:CUIT|Importe)/i', $t, $match)) $nom_r = trim($match[1]);
-            if (preg_match('/operaci[oó]n\s*(\d+)/i', $t, $match)) $nro_op = trim($match[1]);
-            $nom_e = 'Cliente Pcia';
-        }
-
-        // --- 4. CORRECCIÓN MATEMÁTICA DEL MONTO PARA LA BASE DE DATOS ---
-        if (strpos($monto_str_gen, ',') !== false) {
-            $monto_str_gen = str_replace('.', '', $monto_str_gen); // Quitamos puntos de miles
-            $monto_str_gen = str_replace(',', '.', $monto_str_gen); // Cambiamos coma decimal a punto BD
-        } else {
-            // Si tiene punto, verificamos si son miles o decimales (Ej: MP $466.000)
-            if (preg_match('/\.(\d{3})$/', $monto_str_gen)) {
-                $monto_str_gen = str_replace('.', '', $monto_str_gen); // Son miles redondos
+        // --- REGLA DEFINITIVA PARA CUENTA DNI ---
+        elseif (stripos($t, 'Cuenta DNI') !== false || stripos($t, 'Le transferiste a:') !== false || preg_match('/de\s+referencia/i', $t)) {
+            $banco_detectado = 'Cuenta DNI / Pcia';
+            
+            if (preg_match('/Importe\s*\$\s*([\d\.\,]+)/i', $t, $m)) $monto_str_gen = trim($m[1]);
+            
+            if (preg_match('/Le transferiste a:?\s*([A-ZÁÉÍÓÚÑa-z\,\s]+?)\s*(?:CUIL|CUIT|Importe|Agendar)/i', $t, $match)) {
+                $nom_r = trim($match[1]); 
+            } elseif (preg_match('/Para\s+([A-ZÁÉÍÓÚÑa-z\,\s]+?)\s+(?:Alias|CUIL|CUIT|Motivo)/i', $t, $match)) {
+                $nom_r = trim($match[1]); 
+            }
+            
+            if (preg_match('/Origen\s+([A-ZÁÉÍÓÚÑa-z\,\s]+?)\s*\d/i', $t, $match)) {
+                $nom_e = trim($match[1]);
+            } else {
+                $nom_e = 'Cliente Cuenta DNI'; 
+            }
+            
+            // Atrapa el Número de Operación buscando estrictamente "de referencia" para saltarse el "Referencia Varios" de arriba.
+            if (preg_match('/de\s+referencia.*?([0-9oO]{6,15})/i', $t, $match)) {
+                $nro_op = str_ireplace(['O', 'o'], '0', trim($match[1]));
             }
         }
-        $monto = is_numeric($monto_str_gen) ? $monto_str_gen : "0.00";
 
-        // Comodín Número Operación
+        // --- 4. CORRECCIÓN MATEMÁTICA DEL MONTO ---
+        if (strpos($monto_str_gen, ',') !== false) {
+            $monto_str_gen = str_replace('.', '', $monto_str_gen); 
+            $monto_str_gen = str_replace(',', '.', $monto_str_gen); 
+        } else {
+            if (preg_match('/\.(\d{3})$/', $monto_str_gen)) {
+                $monto_str_gen = str_replace('.', '', $monto_str_gen); 
+            }
+        }
+        $monto = is_numeric($monto_str_gen) ? floatval($monto_str_gen) : 0;
+
+        // --- 5. COMODÍN EXTREMO PARA NÚMERO DE OPERACIÓN ---
         if ($nro_op === 'S/N') {
-            preg_match_all('/\b\d{10,18}\b/', $t, $ops);
+            // Ahora atrapa números desde 6 dígitos (antes era mínimo 10)
+            preg_match_all('/\b[0-9oO]{6,22}\b/i', $t, $ops);
             foreach($ops[0] as $posible_op) {
+                $posible_op = str_ireplace('O', '0', strtoupper($posible_op));
+                
                 if ($posible_op != $doc_e && $posible_op != $doc_r && $posible_op != $cbu_e && $posible_op != $cbu_r) {
+                    // Ignoramos si parece una fecha de 8 dígitos (ej: 18032026)
+                    if (strlen($posible_op) == 8 && (strpos($posible_op, '202') === 4 || strpos($posible_op, '202') === 0)) continue;
+                    
                     $nro_op = $posible_op; break;
                 }
             }
         }
 
-        // --- 5. COMODÍN PARA NOMBRES VACÍOS ---
         $nom_e = trim(preg_replace('/\s{2,}.*/', '', $nom_e));
         $nom_r = trim(preg_replace('/\s{2,}.*/', '', $nom_r));
 
         if ($nom_e === 'No detectado' || $nom_r === 'No detectado' || $nom_e === '' || $nom_r === '') {
             preg_match_all('/\b[A-ZÁÉÍÓÚÑa-z]{3,}\s[A-ZÁÉÍÓÚÑa-z]{3,}(?:\s[A-ZÁÉÍÓÚÑa-z]{3,})?\b/', $t, $posibles);
             $candidatos = [];
-            // Prohibimos Mercado y Pago para que no sobreescriba a las personas reales
             $blacklist_nombres = '/TRANSFERENCIA|EXITOSA|COMPROBANTE|DETALLE|FECHA|HORA|MONTO|PESOS|BANCO|LUNES|MARTES|MIERCOLES|JUEVES|VIERNES|SABADO|DOMINGO|ORIGEN|DESTINO|CUENTA|TITULAR|CBU|CVU|CUIT|CUIL|DOCUMENTO|ESTADO|OPERACION|MERCADO|PAGO/i';
             
             foreach ($posibles[0] as $p) {
@@ -194,12 +216,84 @@ if (isset($_POST['imagenes_base64']) || isset($_POST['imagen_base64'])) {
             $stmt_black->bind_param("s", $cbu_e);
             $stmt_black->execute();
             if ($stmt_black->get_result()->num_rows > 0) {
-                echo "BLOQUEADO: El CBU detectado ($cbu_e) está en la Lista Negra por fraude.";
+                echo json_encode(['status' => 'error', 'msg' => "BLOQUEADO: El CBU detectado ($cbu_e) está en la Lista Negra por fraude."]);
+                exit;
+            }
+        }
+        // --- 5.1. BLOQUEO POR NÚMERO DE OPERACIÓN DUPLICADO ---
+        if ($nro_op !== 'S/N' && strlen($nro_op) >= 6) {
+            $stmt_op = $conn->prepare("SELECT id FROM transferencias WHERE datos_json LIKE ?");
+            $like_op = '%"op":"' . $nro_op . '"%';
+            $stmt_op->bind_param("s", $like_op);
+            $stmt_op->execute();
+            if ($stmt_op->get_result()->num_rows > 0) {
+                echo json_encode(['status' => 'error', 'msg' => "BLOQUEADO: El Número de Operación ($nro_op) ya existe en el sistema. ¡Comprobante reciclado!"]);
                 exit;
             }
         }
 
-        // --- 5. GUARDAR LA PRIMER FOTO EN FÍSICO ---
+        // --- 5.2. MATEMÁTICA CBU/CVU (MÓDULO 10) ---
+        if (!function_exists('validarCBU')) {
+            function validarCBU($cbu) {
+                if (!preg_match('/^[0-9]{22}$/', $cbu)) return false;
+                $arr1 = str_split(substr($cbu, 0, 7)); $arr2 = str_split(substr($cbu, 8, 13));
+                $mult = [3, 1, 7, 9]; $sum1 = 0; $sum2 = 0;
+                for ($i = 0; $i < 7; $i++) { $sum1 += $arr1[6 - $i] * $mult[$i % 4]; }
+                for ($i = 0; $i < 13; $i++) { $sum2 += $arr2[12 - $i] * $mult[$i % 4]; }
+                $dig1 = (10 - ($sum1 % 10)) % 10; $dig2 = (10 - ($sum2 % 10)) % 10;
+                return ($dig1 == $cbu[7] && $dig2 == $cbu[21]);
+            }
+        }
+        if ($cbu_e !== '---' && $cbu_e !== '' && !validarCBU($cbu_e)) { echo json_encode(['status' => 'error', 'msg' => "BLOQUEADO: El CBU/CVU de origen ($cbu_e) es matemáticamente FALSO."]); exit; }
+        if ($cbu_r !== '---' && $cbu_r !== '' && !validarCBU($cbu_r)) { echo json_encode(['status' => 'error', 'msg' => "BLOQUEADO: El CBU/CVU de destino ($cbu_r) es matemáticamente FALSO."]); exit; }
+
+        // --- 5.3. MATEMÁTICA CUIT/CUIL (MÓDULO 11) ---
+        if (!function_exists('validarCUIT')) {
+            function validarCUIT($cuit) {
+                if (!preg_match('/^[0-9]{11}$/', $cuit)) return false;
+                $mult = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]; $sum = 0;
+                for ($i = 0; $i < 10; $i++) { $sum += $cuit[$i] * $mult[$i]; }
+                $resto = $sum % 11; $digito = $resto == 0 ? 0 : ($resto == 1 ? 9 : 11 - $resto);
+                return $digito == $cuit[10];
+            }
+        }
+        if ($doc_e !== '---' && strlen($doc_e) == 11 && !validarCUIT($doc_e)) { echo json_encode(['status' => 'error', 'msg' => "BLOQUEADO: El CUIT/CUIL de origen ($doc_e) es matemáticamente FALSO."]); exit; }
+        if ($doc_r !== '---' && strlen($doc_r) == 11 && !validarCUIT($doc_r)) { echo json_encode(['status' => 'error', 'msg' => "BLOQUEADO: El CUIT/CUIL de destino ($doc_r) es matemáticamente FALSO."]); exit; }
+
+        // --- 5.4. CRUCE DE BANCO VS CBU ---
+        if ($cbu_r !== '---' && $cbu_r !== '') {
+            $prefijo = substr($cbu_r, 0, 3);
+            $prefijo_cvu = substr($cbu_r, 0, 8);
+            if (stripos($banco_detectado, 'Mercado Pago') !== false && $prefijo_cvu !== '00000031') {
+                echo json_encode(['status' => 'error', 'msg' => "BLOQUEADO: El ticket dice Mercado Pago pero el CVU destino no le pertenece."]); exit;
+            }
+            if (stripos($banco_detectado, 'Cuenta DNI') !== false && $prefijo !== '014') {
+                echo json_encode(['status' => 'error', 'msg' => "BLOQUEADO: El ticket dice Cuenta DNI pero el CBU no es del Banco Provincia."]); exit;
+            }
+            if (stripos($banco_detectado, 'Ualá') !== false && $prefijo_cvu !== '00000079') {
+                echo json_encode(['status' => 'error', 'msg' => "BLOQUEADO: El ticket dice Ualá pero el CVU destino no le pertenece."]); exit;
+            }
+        }
+        
+                // --- 5.5. VALIDACIÓN DINÁMICA DE CUIT DE DESTINO ---
+        $stmt_conf = $conn->prepare("SELECT cuit FROM configuracion WHERE id = 1");
+        $stmt_conf->execute();
+        $result_conf = $stmt_conf->get_result();
+        $mi_cuit = "";
+        
+        if ($row_conf = $result_conf->fetch_assoc()) {
+            // Limpiamos cualquier guion o espacio para que quede solo el número
+            $mi_cuit = preg_replace('/[^0-9]/', '', $row_conf['cuit']);
+        }
+        
+        // Si el OCR leyó un documento de destino y no es el CUIT de tu local, ¡bloqueado!
+        if ($mi_cuit !== "" && $doc_r !== '---' && strlen($doc_r) >= 10 && $doc_r !== $mi_cuit) {
+            echo json_encode(['status' => 'error', 'msg' => "BLOQUEADO: El CUIT de destino en el comprobante ($doc_r) no coincide con el CUIT del local ($mi_cuit)."]);
+            exit;
+        }
+
+
+        // --- 6. GUARDAR LA PRIMER FOTO EN FÍSICO ---
         $image_parts = explode(";base64,", $fotos[0]);
         $image_type_aux = explode("image/", $image_parts[0]);
         $image_type = $image_type_aux[1] ?? 'jpg';
@@ -213,7 +307,7 @@ if (isset($_POST['imagenes_base64']) || isset($_POST['imagen_base64'])) {
         file_put_contents($ruta_fisica, $image_base64_decode);
         $ruta_db = 'uploads/comprobantes/' . $nombre_archivo;
 
-        // --- 6. GUARDADO FINAL ---
+        // --- 7. GUARDADO FINAL ---
         $datos_excel = json_encode([
             'op' => $nro_op, 'nom_e' => $nom_e, 'doc_e' => $doc_e, 'cbu_e' => $cbu_e, 'banco_e' => $banco_detectado,
             'nom_r' => $nom_r, 'doc_r' => $doc_r, 'cbu_r' => $cbu_r
@@ -222,7 +316,28 @@ if (isset($_POST['imagenes_base64']) || isset($_POST['imagen_base64'])) {
         $sql = "INSERT INTO transferencias (monto, datos_json, texto_completo, imagen_base64) 
                 VALUES ('$monto', '$datos_excel', '".$conn->real_escape_string($t)."', '".$conn->real_escape_string($ruta_db)."')";
         
-        echo ($conn->query($sql)) ? "OK" : "Error SQL";
-    } else { echo "Error IA: No se pudo leer el comprobante."; }
+        if ($conn->query($sql)) {
+            $id_insertado = $conn->insert_id;
+            
+            // LÓGICA DE AUDITORÍA: Cruzar montos
+            if ($monto_esperado > 0 && abs($monto - $monto_esperado) > 0.99) {
+                echo json_encode([
+                    'status' => 'warning',
+                    'id_transferencia' => $id_insertado,
+                    'monto_leido' => number_format($monto, 2, ',', '.'),
+                    'monto_esperado' => number_format($monto_esperado, 2, ',', '.'),
+                    'msg' => 'Discrepancia detectada'
+                ]);
+            } else {
+                echo json_encode(['status' => 'success', 'id_transferencia' => $id_insertado, 'msg' => 'Validación OK']);
+            }
+        } else {
+            echo json_encode(['status' => 'error', 'msg' => 'Error SQL al guardar.']);
+        }
+    } else { 
+        echo json_encode(['status' => 'error', 'msg' => 'Error IA: No se pudo extraer texto del comprobante. Asegúrese que la imagen sea nítida.']); 
+    }
+} else {
+    echo json_encode(['status' => 'error', 'msg' => 'No se enviaron imágenes.']);
 }
 ?>

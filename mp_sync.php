@@ -27,17 +27,19 @@ curl_close($chId);
 $url = "https://api.mercadopago.com/instore/qr/seller/collectors/{$realUserId}/pos/{$pos_id_config}/orders";
 $referencia = "V_" . time(); // Generamos la referencia única para este cobro
 $data = [
-    "external_reference" => $referencia,
-    "title" => "Venta Kiosco",
-    "description" => "Compra general",
-    "total_amount" => $total,
-    "items" => [[
-        "title" => "Productos", 
-        "unit_price" => $total, 
-        "quantity" => 1, 
-        "unit_measure" => "unit", 
-        "total_amount" => $total
-    ]]
+    'external_reference' => $referencia,
+    'title' => 'Venta Kiosco',
+    'description' => 'Venta en mostrador',
+    'total_amount' => $total,
+    'items' => [
+        [
+            'title' => 'Ticket de Venta',
+            'unit_price' => $total,
+            'quantity' => 1,
+            'unit_measure' => 'unit',
+            'total_amount' => $total
+        ]
+    ]
 ];
 
 $ch = curl_init($url);
