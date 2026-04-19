@@ -79,12 +79,18 @@ $nombre_negocio_footer = $nombre_negocio ?? 'SISTEMA DE GESTIÓN';
                 </div>
             </div>
 
+            <?php
+            // Obtenemos el teléfono de la configuración para WhatsApp (limpiamos símbolos)
+            $stmtF = $conexion->query("SELECT telefono_whatsapp FROM configuracion WHERE id=1");
+            $conf_footer = $stmtF ? $stmtF->fetch(PDO::FETCH_ASSOC) : ['telefono_whatsapp' => ''];
+            $tel_admin_limpio = preg_replace('/[^0-9]/', '', $conf_footer['telefono_whatsapp'] ?? '');
+            ?>
             <div class="col-lg-3 col-md-6">
                 <h5 class="footer-title">SOPORTE Y AYUDA</h5>
                 <ul class="list-unstyled">
-                    <li><a href="#" class="footer-link"><i class="bi bi-bug"></i> Reportar Error</a></li>
-                    <li><a href="#" class="footer-link"><i class="bi bi-book"></i> Manual de Usuario</a></li>
-                    <li><a href="#" class="footer-link"><i class="bi bi-headset"></i> Contactar Soporte</a></li>
+                    <li><a href="#" onclick="reportarError(); return false;" class="footer-link"><i class="bi bi-bug"></i> Reportar Error</a></li>
+                    <li><a href="manual.php" target="_blank" class="footer-link"><i class="bi bi-book"></i> Manual de Usuario</a></li>
+                    <li><a href="#" onclick="contactarSoporte(); return false;" class="footer-link"><i class="bi bi-headset"></i> Contactar Soporte</a></li>
                     <li><a href="auditoria.php" class="footer-link"><i class="bi bi-shield-check"></i> Auditoría de Sistema</a></li>
                 </ul>
             </div>
@@ -167,5 +173,66 @@ $nombre_negocio_footer = $nombre_negocio ?? 'SISTEMA DE GESTIÓN';
         });
     });
 </script>
+<script>
+function reportarError() {
+    Swal.fire({
+        title: 'Reportar un Error',
+        html: `
+            <p class="text-muted small mb-3">Describí el problema. Se enviará un WhatsApp al administrador.</p>
+            <textarea id="error_txt" class="form-control shadow-sm mb-3" rows="4" placeholder="Ej: No me deja cobrar con la tarjeta Visa..."></textarea>
+            <div class="form-check text-start bg-light p-2 rounded border">
+                <input class="form-check-input ms-1" type="checkbox" id="enviar_mail" checked>
+                <label class="form-check-label ms-2 small fw-bold text-dark" for="enviar_mail">
+                    Enviar también copia de seguridad por correo
+                </label>
+            </div>
+        `,
+        showCancelButton: true,
+        confirmButtonText: '<i class="bi bi-send"></i> Enviar Reporte',
+        cancelButtonText: 'Cancelar',
+        confirmButtonColor: '#102A57',
+        preConfirm: () => {
+            const txt = document.getElementById('error_txt').value;
+            const mail = document.getElementById('enviar_mail').checked;
+            if(!txt) return Swal.showValidationMessage('Debes describir el error');
+            return { txt, mail };
+        }
+    }).then((res) => {
+        if(res.isConfirmed) {
+            const texto = res.value.txt;
+            const urlActual = window.location.pathname.split('/').pop();
+            const mensajeWa = `🚨 *ALERTA DE ERROR - Vanguard POS* 🚨%0A*Pantalla:* ${urlActual}%0A*Reporte:* ${texto}`;
+            
+            // Si el tilde está marcado, enviamos el correo silencioso en segundo plano
+            if(res.value.mail) {
+                let formData = new FormData();
+                formData.append('mensaje', texto);
+                formData.append('url', urlActual);
+                fetch('ajax_enviar_error.php', { method: 'POST', body: formData });
+            }
+            
+            // Abrimos WhatsApp instantáneamente
+            window.open(`https://wa.me/<?php echo $tel_admin_limpio; ?>?text=${mensajeWa}`, '_blank');
+        }
+    });
+}
+
+function contactarSoporte() {
+    Swal.fire({
+        title: 'Centro de Soporte',
+        html: `
+            <div class="d-flex flex-column gap-3 mt-3">
+                <a href="https://wa.me/<?php echo $tel_admin_limpio; ?>" target="_blank" class="btn btn-success fw-bold p-3 text-start shadow-sm rounded-4"><i class="bi bi-whatsapp fs-4 me-3 align-middle"></i> Chat Directo (Urgencias)</a>
+                <a href="mailto:info@federicogonzalez.net?subject=Consulta Soporte - Vanguard POS" class="btn btn-primary fw-bold p-3 text-start shadow-sm rounded-4"><i class="bi bi-envelope fs-4 me-3 align-middle"></i> Enviar Correo (Administrativo)</a>
+                <a href="https://anydesk.com/es/downloads" target="_blank" class="btn btn-danger fw-bold p-3 text-start shadow-sm rounded-4"><i class="bi bi-pc-display fs-4 me-3 align-middle"></i> AnyDesk (Soporte Remoto)</a>
+            </div>
+        `,
+        showConfirmButton: false,
+        showCloseButton: true,
+        width: '450px'
+    });
+}
+</script>
+
 </body>
 </html>
