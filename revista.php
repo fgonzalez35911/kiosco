@@ -823,7 +823,7 @@ $colores_cat = ['#e60023', '#007bff', '#28a745', '#fd7e14', '#6610f2', '#6f42c1'
                     Swal.fire({
                         icon: 'success', 
                         title: '¡Pedido Recibido!', 
-                        text: 'Tu ID es #' + data.id_pedido + '. Serás notificado al correo electrónico: ' + cli_email,
+                        text: 'Tu ID es #' + data.id_pedido + '. Serás notificado por correo electrónico.', 
                         confirmButtonText: 'Aceptar', 
                         confirmButtonColor: '#102A57'
                     }).then(() => {

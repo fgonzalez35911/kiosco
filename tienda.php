@@ -496,7 +496,7 @@ function openCart() {
                     Swal.fire({
                         icon: 'success', 
                         title: '¡Pedido Recibido!', 
-                        text: 'Tu ID es #' + data.id_pedido + '. Serás notificado al correo electrónico: ' + cli_email,
+                        text: 'Tu ID es #' + data.id_pedido + '. Serás notificado por correo electrónico.', 
                         confirmButtonText: 'Aceptar', 
                         confirmButtonColor: '#102A57'
                     }).then(() => {

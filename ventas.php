@@ -182,6 +182,12 @@ try {
     /* Buscador Resultados */
     body.modo-caja-activo .item-resultado { background-color: #2a2a2a !important; border-bottom-color: #444 !important; color: #fff !important; }
     body.modo-caja-activo .item-resultado:hover { background-color: #3a3a3a !important; }
+    
+    /* Nuevo resaltado azul oscuro no invasivo para la selección en modo caja */
+    body.modo-caja-activo .item-resultado.seleccionado { background-color: #1a3b5c !important; border-left: 4px solid #3399ff !important; }
+    body.modo-caja-activo .item-resultado.seleccionado .text-muted, body.modo-caja-activo .item-resultado.seleccionado .text-danger { color: #b0c4de !important; }
+    body.modo-caja-activo .item-resultado.seleccionado .badge.bg-light { background-color: #3399ff !important; color: #fff !important; border-color: #3399ff !important; }
+    
     body.modo-caja-activo #lista-resultados { background-color: #2a2a2a !important; border: 1px solid #444 !important; }
     body.modo-caja-activo .item-resultado .badge.bg-light { background-color: #444 !important; color: #fff !important; border-color: #555 !important; }
 </style>
@@ -192,9 +198,12 @@ try {
             <div class="col-lg-8 col-12 order-2 order-lg-1">
                 <div class="card shadow border-0 mb-3" style="position: relative; z-index: 100;">
                     <div class="card-body position-relative">
-                        <div class="input-group input-group-lg">
-                            <span class="input-group-text bg-white border-end-0"><i class="bi bi-search"></i></span>
+                        <div class="input-group input-group-lg shadow-sm rounded">
+                            <span class="input-group-text bg-white border-end-0 text-muted"><i class="bi bi-upc-scan"></i></span>
                             <input type="text" id="buscar-producto" class="form-control border-start-0" placeholder="Buscar producto o escanear (F1)..." autocomplete="off">
+                            <button class="btn btn-light border fw-bold text-secondary" id="btn-toggle-rapidos" onclick="toggleRapidos()" type="button" title="Mostrar/Ocultar Catálogo Visual">
+                                <i id="icon-toggle-rapidos" class="bi bi-grid-3x3-gap-fill text-primary"></i>
+                            </button>
                             <button class="btn btn-primary fw-bold d-none d-lg-inline-block" id="btn-modo-caja" onclick="toggleModoCaja()" style="border-radius: 0 8px 8px 0;">
                                 <i class="bi bi-arrows-fullscreen"></i> MODO CAJA
                             </button>
@@ -203,8 +212,8 @@ try {
                     </div>
                 </div>
 
-                <div class="card shadow border-0 mb-3">
-                    <div class="card-header bg-white py-2">
+                <div class="card shadow border-0 mb-2" id="panel-rapidos">
+                    <div class="card-header bg-white py-1 border-bottom-0">
                         <div class="d-flex gap-2 overflow-auto pb-1" id="filtros-rapidos">
                             <button class="btn btn-sm btn-dark fw-bold rounded-pill text-nowrap" onclick="cargarRapidos('')">Todos</button>
                             <?php foreach($conexion->query("SELECT * FROM categorias WHERE activo=1 AND (tipo_negocio = '$rubro_actual' OR tipo_negocio IS NULL)") as $c): ?>
@@ -315,15 +324,15 @@ try {
                             <?php endif; ?>
                         </div>
 
-                        <div class="total-box text-center mb-4">
-                            <small class="text-uppercase text-secondary">Total a Pagar</small>
-                            <h1 id="total-venta" class="display-4 fw-bold mb-0">$ 0.00</h1>
-                            <div id="info-subtotal" class="small text-muted text-decoration-line-through" style="display:none; font-size: 0.9rem;">$ 0.00</div>
+                        <div class="total-box text-center mb-2" style="padding: 10px 15px;">
+                            <div class="text-uppercase text-secondary" style="font-size:0.75rem; font-weight:700;">Total a Pagar</div>
+                            <h2 id="total-venta" class="fw-bold mb-0" style="font-size: 2.2rem; line-height: 1;">$ 0.00</h2>
+                            <div id="info-subtotal" class="text-muted text-decoration-line-through mt-1" style="display:none; font-size: 0.8rem;">$ 0.00</div>
                         </div>
 
-                        <div class="mb-3">
-                            <label class="fw-bold small mb-1">Forma de Pago</label>
-                            <select id="metodo-pago" class="form-select form-select-lg">
+                        <div class="mb-2">
+                            <label class="fw-bold mb-0 text-muted" style="font-size:0.75rem;">Forma de Pago</label>
+                            <select id="metodo-pago" class="form-select form-select-sm fw-bold" style="font-size:0.95rem;">
                                 <?php if (in_array('caja_cobrar_efectivo', $permisos) || $es_admin): ?>
                                     <option value="Efectivo">💵 Efectivo</option>
                                 <?php endif; ?>
@@ -358,16 +367,16 @@ try {
                             </button>
                         </div>
 
-                        <div id="box-vuelto" class="mb-4">
-                            <div class="input-group">
-                                <span class="input-group-text bg-white">Paga con $</span>
-                                <input type="number" id="paga-con" class="form-control form-control-lg fw-bold">
+                        <div id="box-vuelto" class="mb-2">
+                            <div class="input-group input-group-sm">
+                                <span class="input-group-text bg-white fw-bold text-muted">Paga con $</span>
+                                <input type="number" id="paga-con" class="form-control fw-bold text-success" style="font-size:1.1rem;">
                             </div>
-                            <div class="d-flex justify-content-between mt-2 px-1">
-                                <span class="text-muted">Su vuelto:</span>
-                                <span id="monto-vuelto" class="h5 fw-bold text-success">$ 0.00</span>
-                                <div id="desglose-billetes" class="alert alert-info mt-2 small mb-0" style="display:none;"></div>
+                            <div class="d-flex justify-content-between align-items-center mt-1 px-1">
+                                <span class="text-muted small">Vuelto:</span>
+                                <span id="monto-vuelto" class="fw-bold text-success" style="font-size:1.1rem;">$ 0.00</span>
                             </div>
+                            <div id="desglose-billetes" class="alert alert-info mt-1 p-1 small mb-0" style="display:none; font-size:0.75rem;"></div>
                         </div>
                         
                         <div id="box-mixto-info" class="alert alert-info d-none text-center">
@@ -386,11 +395,13 @@ try {
                         </div>
                         <?php endif; ?>
 
-                        <div class="d-grid gap-2 mt-auto">
-                            <button id="btn-finalizar" class="btn btn-success btn-lg py-3 fw-bold shadow">
-                                <i class="bi bi-check-lg"></i> CONFIRMAR VENTA
+                        <div class="d-flex gap-2 mt-auto pt-2 border-top">
+                            <button id="btn-finalizar" class="btn btn-success btn-lg py-2 fw-bold shadow flex-grow-1" style="font-size:1.1rem;">
+                                <i class="bi bi-check-circle-fill me-1"></i> COBRAR
                             </button>
-                            <button onclick="vaciarCarrito()" class="btn btn-outline-danger btn-sm">Cancelar Venta</button>
+                            <button onclick="vaciarCarrito()" class="btn btn-outline-danger py-2 fw-bold shadow-sm" title="Cancelar y limpiar venta" style="width: 50px;">
+                                <i class="bi bi-trash3-fill"></i>
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -546,6 +557,7 @@ try {
     
     <script>
         const metodoTransferenciaConf = '<?php echo $metodo_transferencia; ?>';
+        const userId = '<?php echo $usuario_id; ?>';
 
         let carrito = []; 
         let pagosMixtosConfirmados = null;
@@ -553,7 +565,49 @@ try {
         const modalCliente = { show: function(){ $('#modalBuscarCliente').modal('show'); }, hide: function(){ $('#modalBuscarCliente').modal('hide'); } };
         const modalMixto = { show: function(){ $('#modalPagoMixto').modal('show'); }, hide: function(){ $('#modalPagoMixto').modal('hide'); } };
 
-        $(document).ready(function() { 
+        // SONIDO DE SUPERMERCADO BEEP 1
+
+        // Función para generar el "Bip" de escáner de supermercado
+        function playScannerBeep() {
+            try {
+                let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                let osc = audioCtx.createOscillator();
+                let gain = audioCtx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(1800, audioCtx.currentTime); // Frecuencia aguda típica del láser
+                gain.gain.setValueAtTime(0.15, audioCtx.currentTime); // Volumen suave
+                gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.1); // Corte rápido de 0.1 seg
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.1);
+            } catch(e) { console.log("Audio no soportado"); }
+        }
+
+        // SONIDO DE SUPERMERCADO BEEP 2
+        /*function playScannerBeep() {
+            try {
+                let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                let osc = audioCtx.createOscillator();
+                let gain = audioCtx.createGain();
+                
+                // Onda y frecuencia exacta de un escáner comercial moderno
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(2700, audioCtx.currentTime); 
+                
+                // Volumen seco, robótico y de corte inmediato (80 milisegundos)
+                gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.08);
+                
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.08);
+            } catch(e) { console.log("Audio no soportado"); }
+        }*/
+
+        $(document).ready(function() {
             <?php if($caja_vencida): ?>
                 $('#btn-finalizar').prop('disabled', true).removeClass('btn-success').addClass('btn-secondary');
                 Swal.fire({
@@ -564,6 +618,7 @@ try {
 
             verificarVentaPausada(); 
             cargarRapidos('');
+            cargarPreferenciaCatalogo();
             
             // FIX: Filtramos el evento de clic para que no colapse el AJAX
             $('#btn-finalizar').off('click').on('click', function(e) {
@@ -573,8 +628,32 @@ try {
         });
 
         // =====================================
-        // MODO CAJA (FULLSCREEN)
+        // PREFERENCIA CATÁLOGO RÁPIDO
         // =====================================
+        function cargarPreferenciaCatalogo() {
+            let pref = localStorage.getItem('pref_rapidos_' + userId);
+            if (pref === 'oculto') {
+                $('#panel-rapidos').hide();
+                $('#icon-toggle-rapidos').removeClass('bi-grid-3x3-gap-fill text-primary').addClass('bi-grid-3x3-gap text-secondary');
+            } else {
+                $('#panel-rapidos').show();
+                $('#icon-toggle-rapidos').removeClass('bi-grid-3x3-gap text-secondary').addClass('bi-grid-3x3-gap-fill text-primary');
+            }
+        }
+
+        window.toggleRapidos = function() {
+            const panel = $('#panel-rapidos');
+            const btnIcon = $('#icon-toggle-rapidos');
+            if (panel.is(':visible')) {
+                panel.slideUp('fast');
+                btnIcon.removeClass('bi-grid-3x3-gap-fill text-primary').addClass('bi-grid-3x3-gap text-secondary');
+                localStorage.setItem('pref_rapidos_' + userId, 'oculto');
+            } else {
+                panel.slideDown('fast');
+                btnIcon.removeClass('bi-grid-3x3-gap text-secondary').addClass('bi-grid-3x3-gap-fill text-primary');
+                localStorage.setItem('pref_rapidos_' + userId, 'visible');
+            }
+        };
         function toggleModoCaja() {
             let elem = document.documentElement;
             if (!document.fullscreenElement) {
@@ -796,6 +875,7 @@ try {
                         if(res.status == 'success' && res.data.length > 0) {
                             let p = res.data.find(x => x.plu == parseInt(pluBalanza) || x.codigo_barras == pluBalanza);
                             if(p) {
+                                playScannerBeep(); // Dispara el sonido para el código de balanza
                                 let pFinal = (parseFloat(p.precio_oferta) > 0) ? parseFloat(p.precio_oferta) : parseFloat(p.precio_venta);
                                 let pesoNeto = pesoKgFinal - (parseFloat(p.tara_defecto) || 0);
                                 if(pesoNeto < 0) pesoNeto = 0;
@@ -871,6 +951,7 @@ try {
         });
 
         window.seleccionarProducto = function(p) {
+            playScannerBeep(); // Dispara el sonido al detectar el producto
             let pFinal = (parseFloat(p.precio_oferta) > 0) ? parseFloat(p.precio_oferta) : parseFloat(p.precio_venta);
             if(p.tipo === 'pesable') {
                 $('#idProdPesable').val(p.id);
@@ -1113,7 +1194,7 @@ try {
                             }
                         }
                     });
-                    if(resto > 0) textoBilletes += `Monedas: $${resto.toFixed(2)}`;
+                    // Eliminamos el cálculo de monedas residuales
                     $('#desglose-billetes').html(textoBilletes).show();
                 } else {
                     $('#monto-vuelto').text('$ 0.00');
@@ -1490,6 +1571,7 @@ function abrirEscanerTransferencia(esSuma = false) {
         // --- MAGIA: LIMPIEZA EXTREMADAMENTE SEGURA PARA NO PERDER MODO CAJA ---
         window.limpiarPantallaVenta = function() {
             Swal.close();
+            if(typeof intervaloMP !== 'undefined' && intervaloMP) clearInterval(intervaloMP);
             vaciarCarrito();
             
             // Reseteo de Cliente
@@ -1510,6 +1592,8 @@ function abrirEscanerTransferencia(esSuma = false) {
             if(window.pagosMixtosActuales) window.pagosMixtosActuales = [];
             if(window.puntosUsadosMonto) window.puntosUsadosMonto = 0;
             
+            // RESETEAMOS LOS BOTONES QUE QUEDABAN CONGELADOS
+            $('#btn-sync-mp button').prop('disabled', false).html('<i class="bi bi-cloud-upload"></i> CARGAR PRECIO AL QR');
             $('#btn-finalizar').prop('disabled', false).html('<i class="bi bi-check-lg"></i> CONFIRMAR VENTA');
             setTimeout(() => $('#buscar-producto').focus(), 200);
         };
@@ -1774,12 +1858,16 @@ function abrirEscanerTransferencia(esSuma = false) {
 
                     if(intervaloMP) clearInterval(intervaloMP);
                     intervaloMP = setInterval(function() {
-                        $.getJSON('acciones/verificar_pago_mp.php', { referencia: ref }, function(statusRes) {
+                        // Le agregamos la hora exacta a la URL para obligar al navegador a no usar la caché
+                        let urlSinCache = 'acciones/verificar_pago_mp.php?t=' + new Date().getTime();
+                        
+                        $.getJSON(urlSinCache, { referencia: ref }, function(statusRes) {
                             if(statusRes.estado === 'pagado') {
                                 clearInterval(intervaloMP);
                                 Swal.close();
                                 $('#metodo-pago').val('mercadopago');
-                                $('#btn-finalizar').removeClass('d-none').click(); 
+                                // Guardado directo y silencioso, sin simular clics ni abrir carteles
+                                procesarVentaBackend('completada', null); 
                             }
                         });
                     }, 3000);

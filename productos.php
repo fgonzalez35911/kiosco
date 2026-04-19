@@ -157,7 +157,7 @@ include 'includes/componente_banner.php';
         margin-top: 10px; 
         margin-bottom: 20px; 
         box-shadow: 0 2px 8px rgba(0,0,0,0.08); 
-        padding: 8px 12px !important; /* Margen parejo arriba y abajo */
+        padding: 8px 12px !important; 
         border: 1px solid #eee; 
         border-radius: 8px !important; 
         display: flex;
@@ -166,11 +166,9 @@ include 'includes/componente_banner.php';
     }
     .filter-select { height: 32px !important; font-size: 0.85rem !important; padding: 2px 10px !important; border-radius: 6px !important; border: 1px solid #ddd !important; outline: none; box-shadow: none; background-color: #f8f9fa; }
     
-    /* Contenedor del buscador */
     .search-group { position: relative; display: flex; align-items: center; background: #f8f9fa; border: 1px solid #ddd; border-radius: 6px; height: 32px; width: 100%; overflow: hidden; }
     .search-input { border: none !important; box-shadow: none !important; height: 100% !important; background: transparent; font-size: 0.85rem; padding: 0 10px 0 32px !important; outline: none; width: 100%; }
     
-    /* Lupa flotante que desaparece al escribir */
     .search-icon { position: absolute; left: 10px; font-size: 0.9rem !important; color: #888; pointer-events: none; transition: opacity 0.15s ease; }
     .search-input:not(:placeholder-shown) ~ .search-icon { opacity: 0; visibility: hidden; }
     
@@ -198,12 +196,46 @@ include 'includes/componente_banner.php';
     .card-footer-actions { padding-top: 6px !important; margin-top: auto !important; }
     .btn-action { width: 32px !important; height: 32px !important; font-size: 0.85rem !important; } 
     .stock-progress { height: 6px !important; margin-top: 2px !important; }
+
+    /* --- MAGIA PARA LISTA EN CELULARES (CERO SCROLL HORIZONTAL) --- */
+    @media (max-width: 768px) {
+        #listaCategorias .table-responsive { overflow-x: hidden !important; }
+        #listaCategorias table { table-layout: fixed !important; width: 100% !important; }
+        #listaCategorias th, #listaCategorias td { 
+            padding: 8px 4px !important; 
+            font-size: 11px !important; 
+            border-right: 1px solid #e9ecef; /* Delimitador vertical */
+            white-space: normal !important;
+            word-wrap: break-word;
+            vertical-align: middle;
+        }
+        #listaCategorias th:last-child, #listaCategorias td:last-child { border-right: none; }
+        
+        .col-check { display: none !important; }
+        .col-prod { width: 44% !important; }
+        .col-precio { width: 21% !important; text-align: center !important; font-size: 10px !important; padding: 8px 2px !important; }
+        .col-stock { width: 14% !important; padding: 8px 2px !important; font-size: 10px !important; }
+        .col-res { width: 10% !important; font-size: 10px !important; padding: 8px 2px !important; }
+        .col-acc { width: 11% !important; padding: 8px 2px !important; text-align: center; }
+        
+        .acciones-desktop { display: none !important; }
+        .acciones-mobile { display: block !important; text-align: center; }
+    }
+    
+    @media (min-width: 769px) {
+        .acciones-mobile { display: none !important; }
+        .col-check { width: 5%; }
+        .col-prod { width: 25%; }
+        .col-precio { width: 12%; }
+        .col-stock { width: 12%; }
+        .col-res { width: 10%; }
+        .col-acc { width: 11%; }
+    }
 </style>
 
 <div class="container pb-5 mt-n4" style="position: relative; z-index: 20;">
 
-        <div class="filter-bar sticky-desktop rounded-4 p-3">
-        
+    <div class="filter-bar sticky-desktop rounded-4 p-3">
         <div class="d-flex gap-2 w-100 mb-md-0 mb-2">
             <button class="btn btn-primary fw-bold btn-toggle-filters flex-fill m-0 shadow-sm d-md-none" type="button" onclick="toggleFiltrosMovil()">
                 <i class="bi bi-funnel-fill"></i> MOSTRAR FILTROS
@@ -239,8 +271,6 @@ include 'includes/componente_banner.php';
             </select>
         </div>
     </div>
-
-
 
     <div class="alert py-2 small mb-4 text-center fw-bold border-0 shadow-sm rounded-3" style="background-color: #e9f2ff; color: #102A57;">
         <i class="bi bi-hand-index-thumb-fill me-1"></i> Toca o haz clic en un producto para ver la ficha técnica y opciones
@@ -336,7 +366,7 @@ include 'includes/componente_banner.php';
                     </div>
                 </div>
             </div>
-                </div>
+        </div>
         <?php endforeach; ?>
     </div>
 
@@ -348,7 +378,7 @@ include 'includes/componente_banner.php';
             $nc = strtoupper($p['cat'] ?? 'GENERAL');
             $prod_cat[$nc][] = $p;
         }
-        ksort($prod_cat); // Ordena alfabéticamente las categorías
+        ksort($prod_cat); 
         foreach($prod_cat as $nom_cat => $items_cat):
         ?>
         <div class="card shadow-sm mb-4 seccion-categoria">
@@ -359,18 +389,24 @@ include 'includes/componente_banner.php';
                 <table class="table table-hover table-sm align-middle mb-0" style="font-size: 13px;">
                     <thead class="table-light">
                         <tr>
-                            <th class="ps-3" style="width: 5%;">
+                            <th class="ps-3 text-center col-check">
                                 <?php if($es_admin || in_array('eliminar_producto', $permisos)): ?>
-                                <input type="checkbox" class="form-check-input" onclick="alternarTodosCat(this, '<?php echo md5($nom_cat); ?>')" style="transform: scale(1.2); cursor:pointer;">
+                                <input type="checkbox" class="form-check-input shadow-sm" onclick="alternarTodosCat(this, '<?php echo md5($nom_cat); ?>')" style="transform: scale(1.2); cursor:pointer;">
                                 <?php endif; ?>
                             </th>
-                            <th class="d-none d-md-table-cell" style="width: 15%;">CÓDIGO</th>
-                            <th style="width: 30%;">PRODUCTO</th>
-                            <th class="text-end" style="width: 15%;">PRECIO</th>
-                            <th class="text-center" style="width: 15%;">STOCK</th>
-                            <th class="border-0 text-warning" style="width: 100px;">RESERVADO</th>
-                            <th class="text-center d-none d-md-table-cell" style="width: 10%;">ESTADO</th>
-                            <th class="text-center" style="width: 10%;">ACCIONES</th>
+                            <th class="d-none d-md-table-cell">CÓDIGO</th>
+                            <th class="col-prod">PRODUCTO</th>
+                            <th class="text-end col-precio">PRECIO</th>
+                            <th class="text-center col-stock">STOCK</th>
+                            <th class="text-center text-warning col-res">
+                                <span class="d-none d-md-inline">RESERV.</span>
+                                <span class="d-md-none" title="Reservado">RES.</span>
+                            </th>
+                            <th class="text-center d-none d-md-table-cell">ESTADO</th>
+                            <th class="text-center col-acc">
+                                <span class="d-none d-md-inline">ACCIONES</span>
+                                <span class="d-md-none"><i class="bi bi-gear-fill text-muted"></i></span>
+                            </th>
                         </tr>
                     </thead>
                     <tbody>
@@ -399,34 +435,55 @@ include 'includes/componente_banner.php';
                             }
                         ?>
                         <tr class="item-lista" data-nombre="<?= strtolower($p['descripcion']) ?>" data-codigo="<?= strtolower($p['codigo_barras']) ?>" data-cat="<?= $p['id_categoria'] ?>" data-estado="<?= $estD ?>" data-precio="<?= $pv ?>" data-id="<?= $p['id'] ?>">
-                            <td class="ps-3">
+                            
+                            <td class="ps-3 text-center col-check">
                                 <?php if($es_admin || in_array('eliminar_producto', $permisos)): ?>
-                                <input type="checkbox" class="form-check-input checkProd checkCat-<?php echo md5($nom_cat); ?>" value="<?= $p['id'] ?>" onclick="event.stopPropagation(); revisarChecks()" style="transform: scale(1.2); cursor:pointer;">
+                                <input type="checkbox" class="form-check-input checkProd checkCat-<?php echo md5($nom_cat); ?> shadow-sm" value="<?= $p['id'] ?>" onclick="event.stopPropagation(); revisarChecks()" style="transform: scale(1.2); cursor:pointer;">
                                 <?php endif; ?>
                             </td>
+                            
                             <td class="text-muted d-none d-md-table-cell"><?= $p['codigo_barras'] ?></td>
-                            <td class="fw-bold" style="cursor:pointer; color: #102A57;" onclick="verFichaProducto(<?= $p['id'] ?>)">
+                            
+                            <td class="fw-bold col-prod" style="cursor:pointer; color: #102A57;" onclick="verFichaProducto(<?= $p['id'] ?>)">
                                 <?= $p['descripcion'] ?>
                                 <div class="d-md-none text-muted fw-normal mt-1" style="font-size: 10px;">Cód: <?= $p['codigo_barras'] ?></div>
                             </td>
-                            <td class="text-end fw-bold text-success">$<?= number_format($pv, 2, ',', '.') ?></td>
-                            <td class="text-center text-warning fw-bold"><?= floatval($p['stock_reservado'] ?? 0) ?></td>
+                            
+                            <td class="text-end fw-bold text-success col-precio">$<?= number_format($pv, 2, ',', '.') ?></td>
+                            
+                            <td class="text-center fw-bold col-stock" style="color: <?= $es_bajo_stock_cat ? '#dc3545' : '#198754' ?>;">
+                                <?= $txt_stock_lista ?>
+                            </td>
+
+                            <td class="text-center text-warning fw-bold col-res"><?= floatval($p['stock_reservado'] ?? 0) ?></td>
+                            
                             <td class="text-center d-none d-md-table-cell">
                                 <div class="form-check form-switch m-0 d-flex justify-content-center">
-                                    <input class="form-check-input" type="checkbox" onchange="window.location.href='productos.php?toggle_id=<?= $p['id'] ?>&estado=<?= $p['activo'] ?>'" <?= $p['activo'] ? 'checked' : '' ?>>
+                                    <input class="form-check-input shadow-sm" type="checkbox" onchange="window.location.href='productos.php?toggle_id=<?= $p['id'] ?>&estado=<?= $p['activo'] ?>'" <?= $p['activo'] ? 'checked' : '' ?> style="cursor:pointer;">
                                 </div>
                             </td>
-                            <td class="text-center">
-                                <div class="d-flex justify-content-center gap-1">
-                                    <button class="btn btn-sm btn-primary py-0 px-2" onclick="reponerStock(<?= $p['id'] ?>, '<?= addslashes($p['descripcion']) ?>', <?= floatval($p['stock_actual']) ?>, '<?= $p['tipo'] ?>')">+ Stock</button>
-                                    <a href="<?= $p['tipo'] === 'combo' ? 'combos.php?editar_codigo='.trim($p['codigo_barras']).'&origen=productos' : 'producto_formulario.php?id='.$p['id'] ?>" class="btn btn-sm btn-outline-dark py-0 px-2"><i class="bi bi-pencil"></i></a>
+                            
+                            <td class="text-center col-acc">
+                                <div class="d-flex justify-content-center gap-2 acciones-desktop">
+                                    <button type="button" class="btn btn-sm btn-success py-1 px-2 shadow-sm" title="Ingreso Rápido de Stock" onclick="reponerStock(<?= $p['id'] ?>, '<?= addslashes($p['descripcion']) ?>', <?= floatval($p['stock_actual']) ?>, '<?= $p['tipo'] ?>')">
+                                        <i class="bi bi-box-arrow-in-down"></i>
+                                    </button>
+                                    <a href="<?= $p['tipo'] === 'combo' ? 'combos.php?editar_codigo='.trim($p['codigo_barras']).'&origen=productos' : 'producto_formulario.php?id='.$p['id'] ?>" class="btn btn-sm btn-outline-dark py-1 px-2 shadow-sm" title="Editar">
+                                        <i class="bi bi-pencil-fill"></i>
+                                    </a>
                                     <?php if($es_admin || in_array('eliminar_producto', $permisos)): ?>
-                                    <button type="button" class="btn btn-sm btn-outline-danger py-0 px-2" onclick="event.stopPropagation(); borrarId(<?= $p['id'] ?>)"><i class="bi bi-trash-fill"></i></button>
+                                    <button type="button" class="btn btn-sm btn-danger py-1 px-2 shadow-sm" title="Eliminar" onclick="event.stopPropagation(); borrarId(<?= $p['id'] ?>)">
+                                        <i class="bi bi-trash3-fill"></i>
+                                    </button>
                                     <?php endif; ?>
+                                </div>
+                                <div class="acciones-mobile">
+                                    <button type="button" class="btn btn-sm btn-light border shadow-sm py-1 px-2 text-primary" onclick="event.stopPropagation(); abrirOpcionesMovil(<?= $p['id'] ?>, '<?= addslashes($p['descripcion']) ?>', <?= floatval($p['stock_actual']) ?>, '<?= $p['tipo'] ?>', '<?= trim($p['codigo_barras']) ?>')">
+                                        <i class="bi bi-three-dots-vertical"></i>
+                                    </button>
                                 </div>
                             </td>
                         </tr>
-
                         <?php endforeach; ?>
                     </tbody>
                 </table>
@@ -434,10 +491,7 @@ include 'includes/componente_banner.php';
         </div>
         <?php endforeach; ?>
     </div>
-
 </div>
-
-
 
 <div class="modal fade" id="modalReponerStock" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">
@@ -557,7 +611,6 @@ function reponerStock(id, nombre, actual, tipo) {
     document.getElementById('rep_id').value = id;
     document.getElementById('rep_nombre').value = nombre;
     
-    // Formatear visualmente el stock actual en el input
     let txtActual = actual + " u.";
     if (tipo === 'pesable') {
         let kilos = Math.floor(actual);
@@ -567,15 +620,12 @@ function reponerStock(id, nombre, actual, tipo) {
         else txtActual = gramos + "gr";
     }
     document.getElementById('rep_actual').value = txtActual;
-    
     document.getElementById('rep_tipo').value = tipo;
 
-    // Resetear inputs
     document.getElementById('rep_sumar').value = '';
     document.getElementById('rep_kilos').value = '';
     document.getElementById('rep_gramos').value = '';
 
-    // Alternar visibilidad según tipo
     if (tipo === 'pesable') {
         document.getElementById('div_rep_unitario').style.display = 'none';
         document.getElementById('rep_sumar').removeAttribute('required');
@@ -595,9 +645,41 @@ function reponerStock(id, nombre, actual, tipo) {
     }, 500);
 }
 
-<?php
-// Carga de firmas para el modal JS (Idéntico a Devoluciones)
+// MENÚ DE OPCIONES PARA CELULAR
+function abrirOpcionesMovil(id, nombre, stock_actual, tipo, codigo) {
+    let linkEditar = tipo === 'combo' ? 'combos.php?editar_codigo=' + codigo + '&origen=productos' : 'producto_formulario.php?id=' + id;
+    
+    let btnEliminar = '';
+    <?php if($es_admin || in_array('eliminar_producto', $permisos)): ?>
+    btnEliminar = `<button class="btn btn-outline-danger fw-bold py-2 shadow-sm rounded-3" onclick="Swal.close(); setTimeout(() => borrarId(${id}), 300)">
+        <i class="bi bi-trash3-fill fs-5 me-2"></i> Eliminar
+    </button>`;
+    <?php endif; ?>
 
+    let htmlOpciones = `
+        <div class="d-flex flex-column gap-2 p-1 mt-2">
+            <button class="btn btn-success fw-bold py-2 shadow-sm rounded-3" onclick="Swal.close(); setTimeout(() => reponerStock(${id}, '${nombre.replace(/'/g, "\\'")}', ${stock_actual}, '${tipo}'), 300)">
+                <i class="bi bi-box-arrow-in-down fs-5 me-2"></i> Ingresar Stock
+            </button>
+            <button class="btn btn-primary fw-bold py-2 shadow-sm rounded-3" onclick="window.location.href='${linkEditar}'">
+                <i class="bi bi-pencil-fill fs-5 me-2"></i> Editar Producto
+            </button>
+            ${btnEliminar}
+        </div>
+    `;
+    
+    Swal.fire({
+        title: '<h5 class="fw-bold mb-0 text-primary">Opciones de Producto</h5><small class="text-muted" style="font-size:12px;">' + nombre + '</small>',
+        html: htmlOpciones,
+        showConfirmButton: false,
+        showCloseButton: true,
+        position: 'center',
+        backdrop: true,
+        animation: true
+    });
+}
+
+<?php
 $firmas_base64 = [];
 $res_f = $conexion->query("SELECT id FROM usuarios")->fetchAll(PDO::FETCH_ASSOC);
 foreach($res_f as $u) {
@@ -612,7 +694,6 @@ function verFichaProducto(id) {
     fetch(`productos.php?ajax_get_producto=${id}`).then(r => r.json()).then(data => {
         const p = data.producto; const c = data.conf; const owner = data.owner;
         
-        // Lógica de Stock: Sin decimales para unidades, 3 para peso
         let stockF = (p.stock_actual % 1 === 0) ? parseInt(p.stock_actual) + " u." : parseFloat(p.stock_actual).toFixed(3) + " u.";
         if (p.tipo === 'pesable') {
             let stkFloat = parseFloat(p.stock_actual);
@@ -627,7 +708,6 @@ function verFichaProducto(id) {
         let linkPdf = window.location.origin + "/ticket_producto_pdf.php?id=" + p.id;
         let qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=110x110&margin=2&data=` + encodeURIComponent(linkPdf);
         
-        // Firma del Dueño (Rompe el caché con ?v=timestamp)
         let aclaracion = owner ? (owner.nombre_completo + " | " + owner.nombre_rol).toUpperCase() : 'GERENCIA AUTORIZADA';
         let rutaFirma = owner ? `img/firmas/usuario_${owner.id}.png?v=${Date.now()}` : `img/firmas/firma_admin.png?v=${Date.now()}`;
         let firmaHtml = `<img src="${rutaFirma}" style="max-height: 80px; margin-bottom: -25px;" onerror="this.style.display='none'"><br><div style="border-top:1px solid #000; width:100%; margin-top:5px;"></div><small style="font-size:9px; font-weight:bold;">${aclaracion}</small>`;
@@ -703,27 +783,6 @@ function abrirModalCrear() {
     });
 }
 
-function generarReporteCatalogo() {
-    Swal.fire({
-        title: 'Reporte de Catálogo', text: '¿Cómo desea recibir el inventario?', icon: 'info', showConfirmButton: false, showCloseButton: true,
-        footer: `<div class="d-flex gap-2">
-            <button class="btn btn-sm btn-outline-dark fw-bold" onclick="window.open('ticket_catalogo_pdf.php', '_blank')">PDF</button>
-            <button class="btn btn-sm btn-primary fw-bold" onclick="enviarMailCatalogo()">EMAIL</button>
-        </div>`
-    });
-}
-
-function enviarMailCatalogo() {
-    Swal.fire({ title: 'Enviar Catálogo', input: 'email', showCancelButton: true, confirmButtonText: 'ENVIAR' }).then((r) => {
-        if(r.isConfirmed && r.value) {
-            Swal.fire({ title: 'Enviando...', didOpen: () => { Swal.showLoading(); }});
-            $.post('acciones/enviar_email_catalogo.php', { email: r.value }, function(res) {
-                Swal.fire(res.status === 'success' ? '¡Enviado!' : 'Error', res.msg, res.status);
-            }, 'json');
-        }
-    });
-}
-
 function cambiarDiseno(esLista) {
     if (esLista) {
         document.getElementById('gridProductos').classList.add('d-none');
@@ -740,20 +799,15 @@ function aplicarFiltros() {
     let est = document.getElementById('filtroEstado').value;
     let ord = document.getElementById('ordenarPor').value;
     
-    // 1. ORDENAR Y FILTRAR TARJETAS (GRID)
     let grid = document.getElementById('gridProductos');
     if (grid) {
         let itemsGrid = Array.from(grid.querySelectorAll('.item-grid'));
-        
-        // Primero ordenamos en memoria
         itemsGrid.sort((a, b) => {
             if (ord === 'nombre_asc') return a.dataset.nombre.localeCompare(b.dataset.nombre);
             if (ord === 'precio_alto') return parseFloat(b.dataset.precio) - parseFloat(a.dataset.precio);
             if (ord === 'precio_bajo') return parseFloat(a.dataset.precio) - parseFloat(b.dataset.precio);
-            return parseInt(b.dataset.id) - parseInt(a.dataset.id); // recientes
+            return parseInt(b.dataset.id) - parseInt(a.dataset.id);
         });
-        
-        // Luego las pegamos de nuevo y aplicamos visibilidad
         itemsGrid.forEach(item => {
             grid.appendChild(item);
             let cumpleTxt = (item.dataset.nombre.includes(txt) || item.dataset.codigo.includes(txt));
@@ -763,19 +817,16 @@ function aplicarFiltros() {
         });
     }
 
-    // 2. ORDENAR Y FILTRAR LISTAS (TABLAS)
     document.querySelectorAll('.seccion-categoria').forEach(sec => {
         let tbody = sec.querySelector('tbody');
         if (tbody) {
             let itemsLista = Array.from(tbody.querySelectorAll('.item-lista'));
-            
             itemsLista.sort((a, b) => {
                 if (ord === 'nombre_asc') return a.dataset.nombre.localeCompare(b.dataset.nombre);
                 if (ord === 'precio_alto') return parseFloat(b.dataset.precio) - parseFloat(a.dataset.precio);
                 if (ord === 'precio_bajo') return parseFloat(a.dataset.precio) - parseFloat(b.dataset.precio);
                 return parseInt(b.dataset.id) - parseInt(a.dataset.id);
             });
-            
             let filasVisibles = 0;
             itemsLista.forEach(item => {
                 tbody.appendChild(item);
@@ -783,13 +834,9 @@ function aplicarFiltros() {
                 let cumpleCat = (cat === 'todos' || item.dataset.cat === cat);
                 let cumpleEst = (est === 'todos' || item.dataset.estado.includes(est));
                 if(cumpleTxt && cumpleCat && cumpleEst) { 
-                    item.classList.remove('d-none'); 
-                    filasVisibles++;
-                } else { 
-                    item.classList.add('d-none'); 
-                }
+                    item.classList.remove('d-none'); filasVisibles++;
+                } else { item.classList.add('d-none'); }
             });
-            
             if (filasVisibles === 0) { sec.classList.add('d-none'); } else { sec.classList.remove('d-none'); }
         }
     });
@@ -800,7 +847,6 @@ document.getElementById('filtroCat').addEventListener('change', aplicarFiltros);
 document.getElementById('filtroEstado').addEventListener('change', aplicarFiltros);
 document.getElementById('ordenarPor').addEventListener('change', aplicarFiltros);
 
-// Auto-seleccionar filtro si viene desde el Dashboard
 document.addEventListener("DOMContentLoaded", function() {
     const urlParams = new URLSearchParams(window.location.search);
     const filtroUrl = urlParams.get('filtro');
@@ -822,6 +868,12 @@ function revisarChecks() {
         if(marcados > 0) btn.classList.remove('d-none');
         else btn.classList.add('d-none');
     }
+}
+
+function alternarTodosCat(checkbox, idCat) {
+    let checks = document.querySelectorAll('.checkCat-' + idCat);
+    checks.forEach(c => { c.checked = checkbox.checked; });
+    revisarChecks();
 }
 
 function borrarId(id) { procesarBorrado([id]); }

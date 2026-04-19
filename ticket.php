@@ -41,6 +41,7 @@ if($venta['metodo_pago'] === 'Mixto') {
 
 // 4. CONFIGURACIÓN DINÁMICA
 $conf = $conexion->query("SELECT * FROM configuracion WHERE id=1")->fetch(PDO::FETCH_ASSOC);
+$afip_conf = $conexion->query("SELECT punto_venta FROM afip_config WHERE id=1")->fetch(PDO::FETCH_ASSOC);
 
 // --- CÁLCULO DE AHORRO DE OFERTAS ---
 // --- CÁLCULO DE AHORROS REALES ---
@@ -184,6 +185,12 @@ $ahorro_final_cliente = $ahorro_total + $saldo_favor_usado + $ahorro_ofertas;
             <p class="negrita" style="font-size: 15px; margin-top: 5px;">TOTAL: $<?php echo number_format($venta['total'], 2, ',', '.'); ?></p>
             
             <p style="font-size: 11px; margin-top:2px;">Metodo: <?php echo strtoupper(str_replace('_', ' ', $venta['metodo_pago'])); ?></p>
+            <?php if(!empty($venta['cae'])): ?>
+                <div class="linea"></div>
+                <p class="negrita">Factura C Nro: <?php echo str_pad($afip_conf['punto_venta'] ?? 5, 4, '0', STR_PAD_LEFT) . '-' . str_pad($venta['nro_factura'], 8, '0', STR_PAD_LEFT); ?></p>
+                <p>CAE: <?php echo $venta['cae']; ?></p>
+                <p>Vto. CAE: <?php echo date('d/m/Y', strtotime($venta['cae_vencimiento'])); ?></p>
+            <?php endif; ?>
 
             <?php if($ahorro_final_cliente > 0): ?>
                 <div class="ahorro-box negrita">

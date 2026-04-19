@@ -243,12 +243,12 @@ if (isset($_GET['error'])) {
             <b><?php echo htmlspecialchars($nombre_negocio); ?></b>
         </div>
     </div>
-
-    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.5.1/dist/confetti.browser.min.js"></script>
+            
+    <!--script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.5.1/dist/confetti.browser.min.js"></script>
     <script>
         window.onload = function() {
             confetti({ particleCount: 40, spread: 60, origin: { y: 0.8 }, colors: ['#00d2ff', '#ffffff'] });
         };
-    </script>
+    </script-->
 </body>
 </html>

@@ -77,6 +77,12 @@ $venta_ini = floatval($producto['precio_venta'] ?? 0);
 $ganancia_ini = $venta_ini - $costo_ini;
 $margen_ini = ($costo_ini > 0) ? ($ganancia_ini / $costo_ini) * 100 : 0;
 
+// SOLUCIÓN: Definimos la ruta de la imagen real para la previsualización
+$imgSrc = "https://ui-avatars.com/api/?name=Producto&background=f4f6f9&color=adb5bd&size=250&font-size=0.33"; // Placeholder elegante por defecto
+if (!empty($producto['imagen_url']) && $producto['imagen_url'] !== 'default.jpg' && file_exists($producto['imagen_url'])) {
+    $imgSrc = $producto['imagen_url'];
+}
+
 $titulo = $id ? "Configurar Producto" : "Nuevo Producto";
 $subtitulo = $id ? htmlspecialchars($producto['descripcion']) : "Configuración de precios, stock y balanza.";
 $icono_bg = "bi-box-seam-fill";
@@ -97,6 +103,13 @@ include 'includes/componente_banner.php';
     .tipo-btn { cursor: pointer; transition: all 0.2s; border: 2px solid; border-radius: 12px; padding: 12px; flex: 1; text-align: center; }
     .tipo-btn.active { transform: scale(1.05); box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
     .label-pro { font-size: 0.75rem; font-weight: 800; text-transform: uppercase; color: #6c757d; margin-bottom: 5px; display: block; }
+    
+    /* Mejoras de interfaz para los switches */
+    .switch-box { background: #fff; border: 1px solid #e9ecef; border-radius: 10px; padding: 12px 15px; margin-bottom: 10px; transition: 0.2s ease; display: flex; align-items: center; justify-content: space-between; }
+    .switch-box:hover { border-color: #dee2e6; box-shadow: 0 2px 5px rgba(0,0,0,0.02); }
+    .switch-box .form-check { margin-bottom: 0 !important; padding-left: 0; display: flex; align-items: center; width: 100%; justify-content: space-between; }
+    .switch-box .form-check-input { margin-left: 10px !important; margin-top: 0; float: right; transform: scale(1.2); cursor: pointer; }
+    .switch-box .form-check-label { font-weight: 700; color: #495057; cursor: pointer; margin-bottom: 0; }
 </style>
 
 <div class="container-fluid container-md mt-n4 px-3 mb-5" style="position: relative; z-index: 20;">
@@ -150,7 +163,7 @@ include 'includes/componente_banner.php';
                         <div class="row g-3">
                             <div class="col-md-12">
                                 <label class="label-pro">Nombre del Producto</label>
-                                <input type="text" name="descripcion" class="form-control form-control-lg fw-bold border-light-subtle" value="<?php echo $producto['descripcion'] ?? ''; ?>" required>
+                                <input type="text" name="descripcion" class="form-control form-control-lg fw-bold border-light-subtle" value="<?php echo htmlspecialchars($producto['descripcion'] ?? ''); ?>" required>
                             </div>
                             <div class="col-md-6">
                                 <label class="label-pro">Categoría</label>
@@ -175,7 +188,7 @@ include 'includes/componente_banner.php';
                         <div class="row g-3">
                             <div class="col-md-4">
                                 <label class="label-pro" id="lbl-costo">Costo ($)</label>
-                                <input type="number" step="0.01" name="precio_costo" id="precio_costo" class="form-control form-control-lg fw-bold" value="<?php echo isset($producto['precio_costo']) ? (float)$producto['precio_costo'] : ''; ?>" required oninput="calc()">
+                                <input type="number" step="0.01" name="precio_costo" id="precio_costo" class="form-control form-control-lg fw-bold bg-light" value="<?php echo isset($producto['precio_costo']) ? (float)$producto['precio_costo'] : ''; ?>" required oninput="calc()">
                             </div>
                             <div class="col-md-4">
                                 <label class="label-pro" id="lbl-venta">Venta ($)</label>
@@ -191,10 +204,12 @@ include 'includes/componente_banner.php';
             </div>
 
             <div class="col-lg-4">
-                <div class="card border-0 shadow-sm rounded-4 mb-4 text-center p-4">
-                    <label class="label-pro mb-3">Foto del Producto</label>
-                    <img src="<?php echo $imgSrc; ?>" id="preview" class="img-thumbnail rounded-4 mb-3" style="height: 160px; object-fit: contain; background: white;">
-                    <label class="btn btn-outline-primary btn-sm fw-bold w-100 rounded-pill"><i class="bi bi-camera me-1"></i> CAMBIAR FOTO<input type="file" name="imagen_nueva" accept="image/*" hidden onchange="updPreview(this)"></label>
+                <div class="card border-0 shadow-sm rounded-4 mb-4 text-center p-4 bg-light">
+                    <label class="label-pro mb-3 text-dark">Foto del Producto</label>
+                    <div class="bg-white rounded-4 shadow-sm mb-3 mx-auto overflow-hidden d-flex align-items-center justify-content-center border" style="height: 180px; width: 100%; max-width: 220px;">
+                        <img src="<?php echo $imgSrc; ?>" id="preview" style="max-height: 100%; max-width: 100%; object-fit: contain;">
+                    </div>
+                    <label class="btn btn-primary fw-bold w-100 rounded-pill shadow-sm"><i class="bi bi-camera me-1"></i> CAMBIAR FOTO<input type="file" name="imagen_nueva" accept="image/*" hidden onchange="updPreview(this)"></label>
                 </div>
 
                 <div class="card border-0 shadow-sm rounded-4 mb-4 p-4">
@@ -206,23 +221,41 @@ include 'includes/componente_banner.php';
                         </div>
                     </div>
                     <div class="mb-3">
-                        <label class="label-pro" id="lbl-min">Stock Mínimo</label>
-                        <input type="number" step="0.001" name="stock_minimo" id="stock_minimo" class="form-control fw-bold border-warning" value="<?php echo isset($producto['stock_minimo']) ? (float)$producto['stock_minimo'] : 5; ?>" required oninput="calc()">
+                        <label class="label-pro" id="lbl-min">Stock Mínimo Crítico</label>
+                        <input type="number" step="0.001" name="stock_minimo" id="stock_minimo" class="form-control fw-bold border-warning text-warning" value="<?php echo isset($producto['stock_minimo']) ? (float)$producto['stock_minimo'] : 5; ?>" required oninput="calc()">
                     </div>
-                    <hr>
-                    <div class="mb-3">
-                        <label class="label-pro">Proveedor</label>
+                    <hr class="text-muted">
+                    <div class="mb-4">
+                        <label class="label-pro">Proveedor Asociado</label>
                         <select name="id_proveedor" class="form-select fw-bold border-light-subtle" required>
                             <option value="">-- Seleccionar --</option>
-                            <?php foreach($proveedores as $p): ?><option value="<?php echo $p['id']; ?>" <?php echo (isset($producto['id_proveedor']) && $producto['id_proveedor'] == $p['id']) ? 'selected' : ''; ?>><?php echo $p['empresa']; ?></option><?php endforeach; ?>
+                            <?php foreach($proveedores as $p): ?><option value="<?php echo $p['id']; ?>" <?php echo (isset($producto['id_proveedor']) && $producto['id_proveedor'] == $p['id']) ? 'selected' : ''; ?>><?php echo htmlspecialchars($p['empresa']); ?></option><?php endforeach; ?>
                         </select>
                     </div>
-                    <div class="form-check form-switch mb-2"><input class="form-check-input" type="checkbox" name="es_destacado_web" <?php if(!empty($producto['es_destacado_web'])) echo 'checked'; ?>><label class="form-check-label fw-bold">Destacar Web</label></div>
-                    <div class="form-check form-switch mb-2"><input class="form-check-input" type="checkbox" name="es_vegano" <?php if(!empty($producto['es_vegano'])) echo 'checked'; ?>><label class="form-check-label fw-bold">Apto Vegano</label></div>
-                    <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="es_celiaco" <?php if(!empty($producto['es_celiaco'])) echo 'checked'; ?>><label class="form-check-label fw-bold">Sin TACC</label></div>
+                    
+                    <div class="bg-light p-2 rounded-4">
+                        <div class="switch-box">
+                            <div class="form-check">
+                                <label class="form-check-label" for="switchDestacado"><i class="bi bi-star-fill text-warning me-2"></i>Destacar en Tienda Web</label>
+                                <input class="form-check-input bg-primary border-primary" type="checkbox" id="switchDestacado" name="es_destacado_web" <?php if(!empty($producto['es_destacado_web'])) echo 'checked'; ?>>
+                            </div>
+                        </div>
+                        <div class="switch-box">
+                            <div class="form-check">
+                                <label class="form-check-label" for="switchVegano"><i class="bi bi-leaf-fill text-success me-2"></i>Apto Vegano</label>
+                                <input class="form-check-input bg-success border-success" type="checkbox" id="switchVegano" name="es_vegano" <?php if(!empty($producto['es_vegano'])) echo 'checked'; ?>>
+                            </div>
+                        </div>
+                        <div class="switch-box mb-0">
+                            <div class="form-check">
+                                <label class="form-check-label" for="switchCeliaco"><i class="bi bi-info-circle-fill text-info me-2"></i>Sin TACC</label>
+                                <input class="form-check-input bg-info border-info" type="checkbox" id="switchCeliaco" name="es_celiaco" <?php if(!empty($producto['es_celiaco'])) echo 'checked'; ?>>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
-                <button type="submit" class="btn btn-success btn-lg w-100 py-3 rounded-4 fw-bold shadow-lg border-0" style="background: linear-gradient(135deg, #198754 0%, #157347 100%);"><i class="bi bi-check-circle-fill me-2"></i> GUARDAR PRODUCTO</button>
+                <button type="submit" class="btn btn-success btn-lg w-100 py-3 rounded-4 fw-bold shadow-lg border-0" style="background: linear-gradient(135deg, #198754 0%, #157347 100%); letter-spacing: 1px;"><i class="bi bi-save2-fill me-2"></i> GUARDAR PRODUCTO</button>
             </div>
         </div>
     </form>
@@ -292,16 +325,22 @@ include 'includes/componente_banner.php';
         const profit = realV - cost;
         const margin = (cost > 0) ? (profit / cost) * 100 : 0;
 
-        document.getElementById('widget_ganancia').innerText = `$${profit.toLocaleString('es-AR', {minimumFractionDigits: 2})}`;
-        document.getElementById('widget_margen').innerText = `${margin.toFixed(1)}%`;
+        // Actualiza los widgets dinámicos del banner
+        let spanGanancia = document.getElementById('widget_ganancia');
+        let spanMargen = document.getElementById('widget_margen');
+        if(spanGanancia) spanGanancia.innerText = `$${profit.toLocaleString('es-AR', {minimumFractionDigits: 2})}`;
+        if(spanMargen) spanMargen.innerText = `${margin.toFixed(1)}%`;
 
         const stat = document.getElementById('widget_stock_status');
-        if(stock <= minim) { stat.innerText = "REPONER"; stat.className = "text-warning"; } 
-        else { stat.innerText = "OK"; stat.className = "text-white"; }
+        if(stat) {
+            if(stock <= minim) { stat.innerText = "REPONER"; stat.className = "text-warning"; } 
+            else { stat.innerText = "OK"; stat.className = "text-white"; }
+        }
     }
 
     document.addEventListener('DOMContentLoaded', () => {
         cambiarTipo('<?php echo $producto['tipo'] ?? 'unitario'; ?>');
+        calc(); // Ejecuta el cálculo inicial al cargar la página
     });
 </script>
 

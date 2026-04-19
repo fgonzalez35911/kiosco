@@ -3,35 +3,43 @@
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
 
-// 1. Carga de librerías (Asegurate de que la carpeta libs esté en la raíz)
 require '../libs/PHPMailer/src/Exception.php';
 require '../libs/PHPMailer/src/PHPMailer.php';
 require '../libs/PHPMailer/src/SMTP.php';
 
 try {
     $mail = new PHPMailer(true);
-    
-    // 2. Configuración del servidor SMTP
     $mail->isSMTP();
     $mail->Host       = 'smtp.hostinger.com';
     $mail->SMTPAuth   = true;
-    $mail->Username   = 'info@federicogonzalez.net'; // Tu correo
-    $mail->Password   = 'Fmg35911@';                // Tu contraseña
+    $mail->Username   = 'info@federicogonzalez.net';
+    $mail->Password   = 'Fmg35911@';
     $mail->SMTPSecure = 'ssl';
     $mail->Port       = 465;
 
-    // 3. Configuración del envío
-    $mail->setFrom('info@federicogonzalez.net', 'Prueba de Sistema');
-    $mail->addAddress('info@federicogonzalez.net'); // Enviate el correo a vos mismo
+    // CONFIGURACIÓN DE CARACTERES
+    $mail->CharSet = 'UTF-8';
+    $mail->Encoding = 'base64';
+
+    $mail->setFrom('info@federicogonzalez.net', 'Prueba del Sistema');
+    $mail->addAddress('info@federicogonzalez.net');
 
     $mail->isHTML(true);
-    $mail->Subject = 'Prueba de conexión PHPMailer';
-    $mail->Body    = '<h1>¡Conexión Exitosa!</h1><p>Si recibiste esto, la librería y el SMTP están configurados correctamente.</p>';
+    
+    // Asunto codificado para evitar "Â¡" o "Ã³"
+    $subject = 'Prueba de conexión: ¡Acción Exitosa!';
+    $mail->Subject = "=?UTF-8?B?".base64_encode($subject)."?=";
+
+    $mail->Body = "
+    <div style='font-family: sans-serif;'>
+        <h1>¡Conexión Confirmada!</h1>
+        <p>Este mensaje comprueba que los acentos (á, é, í, ó, ú) y la eñe (ñ) se ven correctamente.</p>
+        <p>Drogstore El 10 - Gestión de Ventas.</p>
+    </div>";
 
     $mail->send();
-    echo "<h1>✅ El correo se envió correctamente.</h1><p>Revisá tu bandeja de entrada (e incluso la carpeta de SPAM).</p>";
+    echo "<h1>✅ Enviado sin errores de símbolos.</h1>";
 
 } catch (Exception $e) {
-    echo "<h1>❌ Error al enviar:</h1><p>{$mail->ErrorInfo}</p>";
-    echo "<p>Verificá que la carpeta <b>libs/PHPMailer/src/</b> contenga los archivos necesarios.</p>";
+    echo "<h1>❌ Error:</h1><p>{$mail->ErrorInfo}</p>";
 }
